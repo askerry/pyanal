@@ -119,8 +119,7 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
     groupftcrdms={}
     for roi in roilist:
         print roi
-        grouprdms[roi]=[]
-        groupftcrdms[roi]=[]
+        grouprdms[roi],groupftcrdms[roi]=[],[]
         for subjectn, subject in enumerate(subjects):
             if subject.subjid in runthemnowlist:
                 if runindsubjects:
@@ -129,8 +128,7 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
                     cfg=prepconfigV2(e,detrend=configspec['detrend'],zscore=configspec['zscore'], averaging=configspec['averaging'],removearts=configspec['removearts'], hpfilter=configspec['hpfilter'], clfname=configspec['clfname'], featureselect=configspec['featureselect'])
                     if runindsubjects:
                         dataset=subject.makedataset(disc, sel, roi)
-                        dataset.cfg = cfg
-                        dataset.a['cfg'] = cfg
+                        dataset.cfg,dataset.a['cfg'] = cfg,cfg
                     subdir='subjresults_%s_%s_%s%s/' % (cfg.clfstring, e.task, e.boldsorbetas, savetag)
                     subjfilename=disc+'_'+sel+'_'+roi+'RSA.pkl'
                     if runindsubjects:
@@ -145,8 +143,7 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
                         print "saved to %s%s%s" %(subject.subjanalysisdir,subdir,subjfilename)
                     else:
                         result=mum.loadpickledobject(subject.subjanalysisdir+subdir+subjfilename)
-                        rdm=result.rdm
-                        singleRDM=result.fulltimecourserdm
+                        rdm,singleRDM=result.rdm,result.fulltimecourserdm
                     grouprdms[roi].append(rdm)
                     groupftcrdms[roi].append(singleRDM)
         print "finished %s, %s, %s" %(disc,sel,roi)
@@ -155,23 +152,20 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
 def euclideandistancematrix(matrix):
     '''take a matrix of items in rows and features in columns and return a similarity space of items'''
     dim=len(matrix)
-    distancematrix=np.zeros((dim,dim))
-    transformeddistancematrix=np.zeros((dim,dim))
+    distancematrix,transformeddistancematrix=np.zeros((dim,dim)),np.zeros((dim,dim))
     for vector1n,vector1 in enumerate(matrix):
         for vector2n,vector2 in enumerate(matrix):
             #ed=np.linalg.norm(np.array(vector1)-np.array(vector2))
             ed=similarity(vector1, vector2, metric='euclidean')
             distancematrix[vector1n][vector2n]=ed
             #transformeddistancematrix[vector1n][vector2n]=np.arctanh(rvalue)
-    meandist=np.mean(distancematrix)
-    stddist=np.std(distancematrix, ddof=1)
+    meandist,stddist=np.mean(distancematrix),np.std(distancematrix, ddof=1)
     for vector1n,vector1 in enumerate(matrix):
         for vector2n,vector2 in enumerate(matrix):
             ed=distancematrix[vector1n][vector2n]
             zscored_ed=(ed-meandist)/stddist
             transformeddistancematrix[vector1n][vector2n]=zscored_ed
     return distancematrix, transformeddistancematrix
-
 
 def similarity(pattern1,pattern2, metric='pearsonr'):
     '''takes two arrays (e.g. neural patterns) and computes similarity between them'''
@@ -189,19 +183,14 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
     '''make RDMs for each of the models. option to also visualize initial input matrix.'''
     with open(rsamatrixfile, 'r') as inputfile:
         rsaobj=pickle.load(inputfile)
-    inputmatrix=rsaobj[matrixkey]['itemavgs']
-    itemlabels=rsaobj[matrixkey]['itemlabels']
-    item2emomapping=rsaobj['item2emomapping']
+    inputmatrix,itemlabels,item2emomapping=rsaobj[matrixkey]['itemavgs'],rsaobj[matrixkey]['itemlabels'],rsaobj['item2emomapping']
     #re order to align with conditions
-    newdatamatrix=[]
-    newaxis=[]
+    datamatrix,axis=[],[]
     for c in conditions:
         condlines=[line for linen,line in enumerate(inputmatrix) if abb[item2emomapping[itemlabels[linen]]]==c]
         condlabels=[itemlabels[linen] for linen,line in enumerate(inputmatrix) if abb[item2emomapping[itemlabels[linen]]]==c]
-        newdatamatrix.extend(condlines)
-        newaxis.extend(condlabels)
-    datamatrix=newdatamatrix
-    axis=newaxis
+        datamatrix.extend(condlines)
+        axis.extend(condlabels)
     #make plot for RDM
     if itemsoremos=='ind':
         if visualizeinput:
@@ -211,13 +200,11 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
                 viz.simplematrix(datamatrix, yticklabels=axis, xlabel='%s_inputmatrix' %(matrixkey))
         if similarity=='correlation':
             RSAmat=1-np.corrcoef(datamatrix)
-            plotmin=-1
-            plotmax=1
+            plotmin, plotmax=-1,1
         elif similarity=='euclidean':
             RSAmat_untransformed, RSAmat=euclideandistancematrix(datamatrix)
             RSAmat=-1*RSAmat #because zscored, just flip the sign for RSM instead of RDM
-            plotmin=np.min(RSAmat)
-            plotmax=np.max(RSAmat)
+            plotmin, plotmax=np.min(RSAmat),np.max(RSAmat)
         else:
             raise RuntimeError("%s is not a recognized similarity metric" %(similarity))
         viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=axis, yticklabels=axis, colorspec= 'RdYlBu_r', xtickrotation=90, xlabel='%s_indRSA' %(matrixkey))
@@ -242,8 +229,7 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
         elif similarity=='euclidean':
             RSAmat_untransformed, RSAmat=euclideandistancematrix(emomatrix)
             RSAmat=-1*RSAmat #because zscored, just flip the sign for RSM instead of RDM
-            plotmin=np.min(RSAmat)
-            plotmax=np.max(RSAmat)
+            plotmin,plotmax=np.min(RSAmat),np.max(RSAmat)
         else:
             raise RuntimeError("%s is not a recognized similarity metric" %(similarity))
         viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions, colorspec= 'RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA' %(matrixkey))
@@ -285,8 +271,7 @@ def crossrunsimilarities(ds,conditions, subjectid, roi, distance='pearsonr', tra
         for c2n,c2 in enumerate(conditions):
             pattern2=[sample for samplen,sample in enumerate(ds.samples) if ds.sa.chunks[samplen]==folds[1] and ds.sa.targets[samplen]==c2]
             if pattern1!=[] and pattern2!=[]:
-                pattern1array=pattern1[0]
-                pattern2array=pattern2[0]
+                pattern1array,pattern2array=pattern1[0],pattern2[0]
                 try:
                     sim=similarity(pattern1array,pattern2array, metric=distance)
                 except:
@@ -316,8 +301,7 @@ def crossrunsimilarities(ds,conditions, subjectid, roi, distance='pearsonr', tra
 def relateRDMsgrn(roi_summary, modelRDMs, alphas=[.05, .01, .001], printit=True, plotpermutationfig=True, num_samples=None):
     '''computes relationship between single group neural RDM and each model. significance assessed using bootstrap and condition-permuting.'''
     models=modelRDMs.keys()
-    taus=[]
-    pvals=[]
+    taus,pvals=[],[]
     neuralRDM=roi_summary.grn
     for m in models:
         rdm=modelRDMs[m]
@@ -477,8 +461,7 @@ def bootstrapfromstimuli(e, disc, roi, subjects, configspec, modelRDMs, conditio
     return bsmodelcorrs
 
 def comparemodelRDMfits_bootstraptest(model1, model2, bsmodelcorrs, alpha=0.05):
-    corr1=np.array(bsmodelcorrs[model1])
-    corr2=np.array(bsmodelcorrs[model2])
+    corr1,corr2=np.array(bsmodelcorrs[model1]),np.array(bsmodelcorrs[model2])
     diffs=corr1-corr2
     bsMeanDiff=np.mean(diffs)
     bsSEMDiff=np.std(diffs,ddof=1)
@@ -492,8 +475,7 @@ def comparemodelRDMfits_bootstraptest(model1, model2, bsmodelcorrs, alpha=0.05):
 
 def singlemodelRDM_bootstraperror(roi,modelname,bsmodelcorrs, alpha=0.05, plotit=False, observed=None, printit=True):
     corrs=np.array(bsmodelcorrs[modelname])
-    bsMean=np.mean(corrs)
-    bsSEM=np.std(corrs,ddof=1)
+    bsMean,bsSEM=np.mean(corrs),np.std(corrs,ddof=1)
     if plotit:
         f,ax=plt.subplots(figsize=[4,2])
     else:
@@ -567,19 +549,15 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
     models=modelRDMs.keys()
     comparisons=[el for el in itertools.combinations(range(len(models)),2)]
     for comp in comparisons:
-        m1=models[comp[0]]
-        m2=models[comp[1]]
+        m1,m2=models[comp[0]],models[comp[1]]
         compname=m1+'_VS_'+m2
         print "working on %s (%s)" %(compname, comparisontype)
-        array1=modelsummaries[m1]
-        array2=modelsummaries[m2]
+        array1,array2=modelsummaries[m1],modelsummaries[m2]
         if comparisontype in ('RFXsubjects','stimbootstrap'):
-            mean1=np.mean(array1)
-            mean2=np.mean(array2)
+            mean1,mean2=np.mean(array1),np.mean(array2)
             meandiff=mean1-mean2
         elif comparisontype=='condbootstrap':
-            mean1=roi_summary.grn2models[m1]['tau']
-            mean2=roi_summary.grn2models[m2]['tau']
+            mean1,mean2=roi_summary.grn2models[m1]['tau'],roi_summary.grn2models[m2]['tau']
             meandiff=mean1-mean2
         if comparisontype=='RFXsubjects':
             df=len(array1)-1
@@ -597,10 +575,7 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
 def plotRFXresults(roi,subjs, models, modelsummaries,errorbars='withinsubj', plotit=True):
     '''plot results of RFX on single subject RDMs'''
     subjs=[s for s in subjs if roi in s.rois.keys()]
-    plotmeans=[]
-    plotsems=[]
-    plotwssems=[]
-    subjmeans=[]
+    plotmeans,plotsems,plotwssems,subjmeans=[],[],[],[]
     # for each subject (for this roi), get subject's mean tau across models
     for subj in range(len(subjs)):
         subjms=[modelsummaries[modeln][subj] for modeln in models]

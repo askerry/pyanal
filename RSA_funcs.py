@@ -12,6 +12,7 @@ from copy import deepcopy
 from mypymvpa.analysisobjs.dataset_funcs import preprocess, prepconfigV2
 import mypymvpa.utilities.misc as mum
 import itertools
+import warnings
 
 global abb
 abb=FGEcondmapping
@@ -55,10 +56,10 @@ class ROIsummary():
         self.grn2models[modelname]={'tau':tau, 'permutation_pval':permutation_pval, 'bootstrap_CI':bootstrap_CI, 'bootstrap_SEM':bootstrap_SEM}
     def add_grnmodelcomparisons(self, comp, tau1,tau2, bootstrap_diff, bootstrap_pval, bootstrap_CI):
         self.grnmodelcomparisons[comp]={'tau1':tau1, 'tau2':tau2, 'bootstrap_pval':bootstrap_pval, 'bootstrap_CI': bootstrap_CI}
-    def add_grn2modelsRFX(self, modelname, tau, zval, RFX_pval, RFX_SEM, RFX_WSSEM):
-        self.grn2modelsRFX[modelname]={'tau':tau, 'zval':zval,'RFX_pval':RFX_pval, 'RFX_SEM':RFX_SEM, 'RFX_WSSEM':RFX_WSSEM}
-    def add_grnmodelcomparisonsRFX(self, comp, tau1,tau2, zval, RFX_pval):
-        self.grnmodelcomparisonsRFX[comp]={'tau1':tau1, 'tau2':tau2, 'zval': zval, 'RFX_pval':RFX_pval}
+    def add_grn2modelsRFX(self, modelname, tau, zval, RFX_pval, df, RFX_SEM, RFX_WSSEM):
+        self.grn2modelsRFX[modelname]={'tau':tau, 'zval':zval,'RFX_pval':RFX_pval, 'df':df, 'RFX_SEM':RFX_SEM, 'RFX_WSSEM':RFX_WSSEM}
+    def add_grnmodelcomparisonsRFX(self, comp, tau1,tau2, zval, RFX_pval, df):
+        self.grnmodelcomparisonsRFX[comp]={'tau1':tau1, 'tau2':tau2, 'zval': zval,'RFX_pval':RFX_pval, 'df':df}
     def save(self, analdir, filename):
         filename=analdir+filename
         if not os.path.exists(analdir):
@@ -66,6 +67,39 @@ class ROIsummary():
         with open(filename, 'wb') as output:
             pickler=pickle.Pickler(output, pickle.HIGHEST_PROTOCOL)
             pickler.dump(self)
+    def summarize_grn2models(self):
+        models=self.modelRDMs
+        modeltaus=[self.grn2models[m]['tau'] for m in models]
+        sems=[self.grn2models[m]['bootstrap_SEM'] for m in models]
+        viz.simplebar(modeltaus, yerr=sems, title='%s-- tau of group data' %(self.roi),xlabel='models',xticklabels=models, ylabel='kendall tau-a\n(SEM from bootstrap test)')
+    def summarize_grn2modelsRFX(self, errorbars='ws'):
+        models=self.modelRDMs
+        modeltaus=[self.grn2modelsRFX[m]['tau'] for m in models]
+        if errorbars=='ws':
+            sems=[self.grn2modelsRFX[m]['RFX_WSSEM'] for m in models]
+        else:
+            sems=[self.grn2modelsRFX[m]['RFX_SEM'] for m in models]
+        viz.simplebar(modeltaus, yerr=sems, title='%s-- avg tau of ind data' %(self.roi),xlabel='models',xticklabels=models, ylabel='kendall tau-a\n(SEM from RFX across subjects)')
+    def summarize_grnmodelcomparisonsRFX(self):
+        comparisons=self.grnmodelcomparisonsRFX.keys()
+        for comp in comparisons:
+            r=self.grnmodelcomparisonsRFX[comp]
+            if r['RFX_pval']<.05:
+                tag='***'
+            else:
+                tag=''
+            resultsstring='%s: M1=%.2f, M2=%.2f, z(%s)=%.2f, p=%.3f. %s' %(comp, r['tau1'], r['tau2'], r['df'],r['zval'], r['RFX_pval'], tag)
+            print resultsstring
+    def summarize_grnmodelcomparisons(self):
+        comparisons=self.grnmodelcomparisons.keys()
+        for comp in comparisons:
+            r=self.grnmodelcomparisons[comp]
+            if r['bootstrap_pval']<.05:
+                tag='***'
+            else:
+                tag=''
+            resultsstring='%s: M1=%.2f, M2=%.2f, p=%.3f. %s' %(comp, r['tau1'], r['tau2'], r['bootstrap_pval'], tag)
+            print resultsstring
 
 def prepforrsa(ds):
     '''creates separate RDMs in each CV fold'''
@@ -185,7 +219,7 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
             plotmin=np.min(RSAmat)
             plotmax=np.max(RSAmat)
         else:
-            print "%s is not a recognized similarity metric" %(similarity)
+            raise RuntimeError("%s is not a recognized similarity metric" %(similarity))
         viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=axis, yticklabels=axis, colorspec= 'RdYlBu_r', xtickrotation=90, xlabel='%s_indRSA' %(matrixkey))
     elif itemsoremos=='emos':
         #make emo matrix
@@ -211,7 +245,7 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
             plotmin=np.min(RSAmat)
             plotmax=np.max(RSAmat)
         else:
-            print "%s is not a recognized similarity metric" %(similarity)
+            raise RuntimeError("%s is not a recognized similarity metric" %(similarity))
         viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions, colorspec= 'RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA' %(matrixkey))
     return RSAmat
 
@@ -244,8 +278,7 @@ def crossrunsimilarities(ds,conditions, subjectid, roi, distance='pearsonr', tra
     '''compute neural RDM across runs (diagonal is interpretable)'''
     folds=list(set(ds.sa.chunks))
     if len(folds)>2:
-        print "warning: this code assumes only two folds. you have more than two"
-        print breakit
+        raise RuntimeError('This code assumes only two folds, but you appear to have more than two.')
     rdm=np.zeros([len(conditions), len(conditions)])
     for cn,c in enumerate(conditions):
         pattern1=[sample for samplen,sample in enumerate(ds.samples) if ds.sa.chunks[samplen]==folds[0] and ds.sa.targets[samplen]==c]
@@ -258,10 +291,10 @@ def crossrunsimilarities(ds,conditions, subjectid, roi, distance='pearsonr', tra
                     sim=similarity(pattern1array,pattern2array, metric=distance)
                 except:
                     sim=np.nan
-                    print "warning: unexpectedly failed to compute kendal tau for the following 2 patterns"
+                    warnings.warn("Unexpectedly failed to compute kendal tau for the following 2 patterns")
             else:
                 sim=np.nan
-                #print "warning: you have nan values in your similarity matrix because some conditions were not found"
+                warnings.warn("You have nan values in your similarity matrix because some conditions were not found")
             dissim=1-sim
             rdm[cn][c2n]=dissim
     if distance=='pearsonr':
@@ -298,7 +331,7 @@ def relateRDMsgrn(roi_summary, modelRDMs, alphas=[.05, .01, .001], printit=True,
     bm=np.where(taus==np.max(taus))[0]
     if len(bm)>1:
         if printit:
-            print "warning: multiple best models. taking just the first"
+            warnings.warn("multiple best models found. taking just the first")
     bm=bm[0]
     bestmodel=models[bm]
     if printit:
@@ -352,8 +385,7 @@ def singleRDMrelation_permutationtest(neuralRDM, modelRDM, observedtau, alphas, 
     modelRDM=np.array(modelRDM)
     rdmsize=np.shape(neuralRDM)
     if rdmsize != np.shape(modelRDM):
-        print "warning: RDMs differ in size"
-        print breakit
+        raise RuntimeError('Error: your RDMs differ in size')
     samplecorrs=[]
     for b in range(num_samples):
         colidx=np.random.permutation(rdmsize[0])
@@ -384,23 +416,22 @@ def singleRDMrelation_permutationtest(neuralRDM, modelRDM, observedtau, alphas, 
 
 def bootstrapinner(e,subject, disc, sel, roi, configspec, conditions,num_samples, modelRDMs):
     '''this resamples at the level of individual stimuli'''
-    cfg=prepconfigV2(e,detrend=configspec['detrend'],zscore=configspec['zscore'], averaging=configspec['averaging'],removearts=configspec['removearts'], hpfilter=configspec['hpfilter'], clfname=configspec['clfname'], featureselect=configspec['featureselect'])
-    dataset=subject.makedataset(disc, sel, roi)
-    print sel
-    print dataset.sa.chunks()
-    print breakit
-    dataset.cfg = cfg
-    dataset.a['cfg'] = cfg
-    preppeddata=preprocess(dataset)
-    subjrdms=[]
-    print "working on bootstrap (%s samples, resampling stimuli)" %(num_samples)
-    for b in range(num_samples):
-        idx=[eln for eln,el in enumerate(preppeddata.sa.targets) if el in conditions]
-        rsampleidx=np.random.choice(idx, size=len(idx), replace=True)
-        bssampledata=preppeddata[rsampleidx]
-        bssampledata=prepforrsa(bssampledata)
-        neuralrdm=crossrunsimilarities(bssampledata, conditions, subject.subjid, roi, distance='euclidean', transformed=True, plotit=False)
-        subjrdms.append(neuralrdm)
+    raise RuntimeError('This feature (bootstrapping at the level of individual stimuli) is not yet implemented correctly')
+    #the following may not be implemented correctly
+    # cfg=prepconfigV2(e,detrend=configspec['detrend'],zscore=configspec['zscore'], averaging=configspec['averaging'],removearts=configspec['removearts'], hpfilter=configspec['hpfilter'], clfname=configspec['clfname'], featureselect=configspec['featureselect'])
+    # dataset=subject.makedataset(disc, sel, roi)
+    # dataset.cfg = cfg
+    # dataset.a['cfg'] = cfg
+    # preppeddata=preprocess(dataset)
+    # subjrdms=[]
+    # print "working on bootstrap (%s samples, resampling stimuli)" %(num_samples)
+    # for b in range(num_samples):
+    #     idx=[eln for eln,el in enumerate(preppeddata.sa.targets) if el in conditions]
+    #     rsampleidx=np.random.choice(idx, size=len(idx), replace=True)
+    #     bssampledata=preppeddata[rsampleidx]
+    #     bssampledata=prepforrsa(bssampledata)
+    #     neuralrdm=crossrunsimilarities(bssampledata, conditions, subject.subjid, roi, distance='euclidean', transformed=True, plotit=False)
+    #     subjrdms.append(neuralrdm)
     return subjrdms
 
 def bootstrapfromconditions(disc, modelRDMs, grouprdmmean, num_samples=None, printit=True):
@@ -425,7 +456,7 @@ def bootstrapfromconditions(disc, modelRDMs, grouprdmmean, num_samples=None, pri
 def bootstrapfromstimuli(e, disc, roi, subjects, configspec, modelRDMs, conditions, num_samples=None):
     '''bootstraps at the level of stimuli in individual subjects'''
     print 'performing bootstrapping for errorbars (stimuli)'
-    print "warning: this probably isn't implemented the way you want it. don't use without reading and thinking about it."
+    warnings.warn("This probably isn't implemented the way you want it. don't use without reading and thinking about it.")
     print "starting bootstrap for %s, %s" %(disc, roi)
     sel=e.selectors.keys()[0]
     neuralmtxs=[]
@@ -517,7 +548,7 @@ def singlemodelRFX(e,roi_summary,models, subjects, subdir, disc, errorbars='with
         if printit:
             string='%s: %s(%.2f): z(%.0f)=%.3f, p=%.3f.' % (roi_summary.roi,m,mean,df,z,p)
             print string
-        roi_summary.add_grn2modelsRFX(m,mean,z,p,sems[mn], withinsubjsems[mn])
+        roi_summary.add_grn2modelsRFX(m,mean,z,p,df,sems[mn], withinsubjsems[mn])
     return modelsummaries, roi_summary
 
 def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries, configspec, modelRDMs, conditions, num_samples=None, printit=True):
@@ -554,7 +585,7 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
             df=len(array1)-1
             T,pval,z=sst.wilcoxonAES(array1,array2)
             string='%s: %s(%.2f)-%s(%.2f): z(%.0f)=%.3f, p=%.3f.' % (roi_summary.roi,m1,mean1,m2,mean2,df,z,pval)
-            roi_summary.add_grnmodelcomparisonsRFX(compname,mean1,mean2,z,pval)
+            roi_summary.add_grnmodelcomparisonsRFX(compname,mean1,mean2,z,pval,df)
         elif comparisontype in ('stimbootstrap','condbootstrap'):
             bsMeanDiff, bsSEMDiff, upperbound, lowerbound, nullrejected, pval=comparemodelRDMfits_bootstraptest(m1, m2, bsmodelcorrs, alpha=0.05)
             string = "%s-- %s(%s)-%s(%s): observedMeandiff=%.3f, BSMdiff=%.3f, BSSEMdiff=%.3f, p=%.3f" %(roi_summary.roi,m1,mean1,m2,mean2,meandiff,bsMeanDiff, bsSEMDiff, pval)

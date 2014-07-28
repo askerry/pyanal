@@ -14,6 +14,7 @@ import seaborn as sns
 import scipy.stats as sst
 import csv
 import itertools
+import warnings
 
 def findextractedfiles(studydir,roidir,taskname, key1='', key2=''):
     pscfiles='%s%s/PSC*%s*%s*%s' %(studydir,roidir,key1,taskname,key2)
@@ -180,7 +181,7 @@ def compareconds(studydir,roidir,taskname,roilist,comparisons, subjlist):
         for roi in roilist:
             roipscfiles,roibetafiles=findextractedfiles(studydir,roidir,taskname, key1=roi)
             if len(roibetafiles)>1:
-                print "warning: found multiple beta files"
+                warnings.warn("Found multiple beta files that match %s, %s" %(taskname, roi))
             f=roibetafiles[0]
             with open(f, 'rU') as csvfile:
                 reader = csv.reader(csvfile)
@@ -199,7 +200,7 @@ def comparegroupbetas(studydir,roidir,taskname,roilist,comparisons,groups):
         for roi in roilist:
             roipscfiles,roibetafiles=findextractedfiles(studydir,roidir,taskname, key1=roi)
             if len(roibetafiles)>1:
-                print "warning: found multiple beta files"
+                warnings.warn("Found multiple beta files that match %s, %s" %(taskname, roi))
             f=roibetafiles[0]
             with open(f, 'rU') as csvfile:
                 reader = csv.reader(csvfile)

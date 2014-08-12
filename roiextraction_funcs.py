@@ -26,7 +26,7 @@ def findextractedfiles(studydir, roidir, taskname, key1='', key2=''):
     return foundpscfiles, foundbetafiles
 
 
-def analyzepsc(pscfiles, conditions, colors, subjlist):
+def analyzepsc(pscfiles, conditions, colors, subjlist, limittimecourse=None):
     condlabels = []
     for f in pscfiles:
         with open(f, 'rU') as csvfile:
@@ -57,10 +57,16 @@ def analyzepsc(pscfiles, conditions, colors, subjlist):
                 else:
                     condname = c
                     #ax.plot(range(len(meanhrf)),meanhrf,color=colors[cn], label=condname)
+                if limittimecourse:
+                    meanhrf=meanhrf[limittimecourse[0]:limittimecourse[1]]
+                    semhrf=semhrf[limittimecourse[0]:limittimecourse[1]]
+                    printlabels=[l for ln,l in enumerate(labels) if ln>limittimecourse[0] and ln<len(labels)+limittimecourse[1]]
+                else:
+                    printlabels=labels
                 ax.errorbar(range(len(meanhrf)), meanhrf, color=colors[cn], yerr=semhrf, label=condname)
             ax.set_title(data[0][roiindex])
             ax.set_xticks(range(len(meanhrf)))
-            ax.set_xticklabels(labels, rotation=90)
+            ax.set_xticklabels(printlabels, rotation=90)
             legend = plt.legend(loc='upper right', bbox_to_anchor=(1.5, 1.00), ncol=3, shadow=False)
             plt.show()
 

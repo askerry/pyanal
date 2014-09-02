@@ -14,6 +14,7 @@ from mypymvpa.analysisobjs.dataset_funcs import preprocess, prepconfigV2
 import mypymvpa.utilities.misc as mum
 import itertools
 import warnings
+import seaborn as sns
 
 global abb
 abb = FGEcondmapping
@@ -22,11 +23,12 @@ abb = FGEcondmapping
 class RSAresult():
     '''defines single neural RDM. methods for comparing to models and saving result output'''
 
-    def __init__(self, neuralRDM, roi, subjid, ftcRDM=None, corrtype='pearsonr', symmetrical='True'):
+    def __init__(self, neuralRDM, roi, subjid, ftcRDM=None, corrtype='pearsonr', symmetrical='True', neuraltype='rawsim'):
         self.rdm = neuralRDM
         self.fulltimecourserdm = ftcRDM
         self.roi = roi
         self.corrtype=corrtype
+        self.neuraltype=neuraltype
         self.symmetrical=symmetrical
         self.subjid = subjid
         self.modelcorrs = {}
@@ -115,7 +117,7 @@ class ROIsummary():
         for string in strings:
             print string
 
-    def summarize_grn2modelsRFX(self, models2show='all',errorbars='ws',modelcolors=None, ylim=None):
+    def summarize_grn2modelsRFX(self, models2show='all',errorbars='ws',modelcolors=None, ylim=None, noiseceiling=None):
         if models2show=='all':
             models=self.modelRDMs
         else:
@@ -132,9 +134,11 @@ class ROIsummary():
         else:
             sems = [self.grn2modelsRFX[m]['RFX_SEM'] for m in models]
             eblabel='+/- 1 SEM (between subjects)'
-        viz.simplebar(modelcorrs, yerr=sems, title='%s-- avg %s of ind data' % (self.roi, self.corrtype), xlabel='models',
-                      xticklabels=models, ylabel='%s\n(%s)' %(self.corrtype, eblabel), colors=colors, ylim=ylim)
-
+        ax=viz.simplebar(modelcorrs, yerr=sems, title='%s-- avg %s of ind data' % (self.roi, self.corrtype), xlabel='models',
+                      xticklabels=models, ylabel='%s\n(%s)' %(self.corrtype, eblabel), colors=colors, ylim=ylim, show=False)
+        if noiseceiling:
+            ax.axhspan(noiseceiling[0]-.01, noiseceiling[1], facecolor='#8888AA', alpha=0.15)
+            plt.show()
     def summarize_grnmodelcomparisonsRFX(self, models2show='all'):
         if models2show=='all':
             comparisons=self.grnmodelcomparisons.keys()
@@ -164,6 +168,52 @@ class ROIsummary():
             resultsstring = '%s: M1=%.2f, M2=%.2f, p=%.3f. %s' % (comp, r['corr1'], r['corr2'], r['bootstrap_pval'], tag)
             print resultsstring
 
+class TimecourseRSA():
+    def __init__(self, windowdur, tcrange, roi=None, disc=None, models=[], analdir=None):
+        self.windowdur=windowdur
+        self.roi=roi
+        self.disc=disc
+        self.steps=range(tcrange[0], tcrange[1])
+        self.models=models
+        self.analdir=analdir
+        self.modeltcs_err={model:[0 for tp in self.steps] for model in models}
+        self.modeltcs_corr={model:[0 for tp in self.steps] for model in models}
+        self.modeltcs_ncl={model:[0 for tp in self.steps] for model in models}
+        self.modeltcs_ncu={model:[0 for tp in self.steps] for model in models}
+        colors=sns.color_palette('husl',len(self.models))
+        self.colordict={model:colors[modeln] for modeln,model in enumerate(self.models)}
+    def updatetimecourse(self,model, tpindex, value, error, lower=0, upper=0):
+        self.modeltcs_corr[model][tpindex]=value
+        self.modeltcs_err[model][tpindex]=error
+        self.modeltcs_ncl[model][tpindex]=lower
+        self.modeltcs_ncl[model][tpindex]=upper
+    def plottimecourse(self, model, ax=None, plotnc=False, ylim=[-.04,.1], color=None):
+        y=self.modeltcs_corr[model]
+        l=self.modeltcs_ncl[model]
+        u=self.modeltcs_ncu[model]
+        err=self.modeltcs_err[model]
+        if any(np.array(y)!=0):
+            if color:
+                ax.errorbar(range(len(y)),y, yerr=err, label=model, color=color)
+            else:
+                ax.errorbar(range(len(y)),y, yerr=err, label=model, color=self.colordict[model])
+            if plotnc:
+                ax.errorbar(range(len(y)),l, label='lower bound')
+                ax.errorbar(range(len(y)),u, label='upper bound')
+            ax.set_xticks([el for el in range(len(self.steps))])
+            ax.set_xticklabels([str(el) for el in self.steps])
+            ax.set_xlabel('RSA timecourse (TRs)')
+            ax.set_ylabel('neural-model correlation')
+            ax.set_title('neural-model correlations over time: %s' %(self.roi))
+            ax.legend(loc=[1.05,.3])
+            if plotnc==False:
+                ax.set_ylim(ylim)
+    def save(self):
+        savedir=self.analdir+'timecourse/'
+        if not os.path.exists(savedir): #if the path doesn't exist, make the folder
+            os.mkdir(savedir)
+        filename=savedir+'timecourse_%s_%s.pkl' %(self.roi, self.disc)
+        mum.picklethisobject(filename, self)
 
 def prepforrsa(ds):
     '''creates separate RDMs in each CV fold'''
@@ -178,47 +228,89 @@ def prepforsinglerdm(ds):
     mtds = mtgs(ds)
     return mtds
 
+def relatesingle2group(grouprdms, indRDM, configspec):
+    corrtype=configspec['corrtype']
+    avgRDM=np.mean(grouprdms,axis=0)
+    if corrtype=='kendallstau':
+        corr, p = mus.kendallstau(avgRDM, indRDM, symmetrical=configspec['symmetrical'])
+    elif corrtype=='pearsonr':
+        corr, p, throwaraylength=mus.pearsonr(avgRDM, indRDM,  symmetrical=configspec['symmetrical'])
+    elif corrtype=='spearman':
+        pass
+    return corr
+
+def computenoiseceiling(grouprdms, roilist, configspec):
+    noiseceilings={}
+    for roi in roilist:
+        rdms=np.array(grouprdms[roi])
+        uppercorrs=[]
+        lowercorrs=[]
+        for ind in rdms:
+            uppercorrs.append(relatesingle2group(rdms, ind, configspec))
+        for indn, ind in enumerate(rdms):
+            nminus1rdms=[rdms[i] for i in range(len(rdms)) if i != indn]
+            lowercorrs.append(relatesingle2group(nminus1rdms, ind, configspec))
+        upper=np.mean(uppercorrs)
+        lower=np.mean(lowercorrs)
+        noiseceilings[roi]=(lower,upper)
+    return noiseceilings
+
 
 def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubjects, configspec, modelRDMs, conditions,
-                       savetag, singlesubjplot=True, fullorcrossfoldsRDMs='crossfolds', whichmodels='all'):
+                       savetag, whichmodels='all', svmerrors=None, timecourse=False):
     sel = e.selectors.keys()[0]
     grouprdms = {}
     groupftcrdms = {}
     for roi in roilist:
         print roi
         grouprdms[roi], groupftcrdms[roi] = [], []
+        if runindsubjects:
+            print 'running individual subjects...'
         for subjectn, subject in enumerate(subjects):
             if subject.subjid in runthemnowlist:
-                if runindsubjects:
-                    print "working on subject " + subject.subjid
                 if roi in subject.rois.keys():
-                    cfg = prepconfigV2(e, detrend=configspec['detrend'], zscore=configspec['zscore'],
-                                       averaging=configspec['averaging'], removearts=configspec['removearts'],
-                                       hpfilter=configspec['hpfilter'], clfname=configspec['clfname'],
-                                       featureselect=configspec['featureselect'])
-                    if runindsubjects:
-                        dataset = subject.makedataset(disc, sel, roi)
-                        dataset.cfg, dataset.a['cfg'] = cfg, cfg
-                    subdir = 'subjresults_%s_%s_%s%s/' % (cfg.clfstring, e.task, e.boldsorbetas, savetag)
                     subjfilename = disc + '_' + sel + '_' + roi + 'RSA.pkl'
-                    if runindsubjects:
-                        preppeddata = preprocess(dataset)
-                        singletimecoursedata = prepforsinglerdm(preppeddata)
-                        preppeddata = prepforrsa(preppeddata)
-                        singleRDM = singletimecoursesimilarities(singletimecoursedata, conditions, subject.subjid, roi,
-                                                                 distance=configspec['similarity'],
-                                                                 transformed=configspec['transformed'],
-                                                                 plotit=singlesubjplot)
-                        rdm = crossrunsimilarities(preppeddata, conditions, subject.subjid, roi,
-                                                   distance=configspec['similarity'],
-                                                   transformed=configspec['transformed'], plotit=singlesubjplot)
+                    if configspec['neuraltype']=='rawsim':
+                        cfg = prepconfigV2(e, detrend=configspec['detrend'], zscore=configspec['zscore'],
+                                           averaging=configspec['averaging'], removearts=configspec['removearts'],
+                                           hpfilter=configspec['hpfilter'], clfname=configspec['clfname'],
+                                           featureselect=configspec['featureselect'])
+                        if runindsubjects:
+                            dataset = subject.makedataset(disc, sel, roi)
+                            dataset.cfg, dataset.a['cfg'] = cfg, cfg
+                        subdir = 'subjresults_%s_%s_%s%s/' % (cfg.clfstring, e.task, e.boldsorbetas, savetag)
+                        if runindsubjects:
+                            preppeddata = preprocess(dataset)
+                            singletimecoursedata = prepforsinglerdm(preppeddata)
+                            preppeddata = prepforrsa(preppeddata)
+                            singleRDM = singletimecoursesimilarities(singletimecoursedata, conditions, subject.subjid, roi,
+                                                                     distance=configspec['similarity'],
+                                                                     transformed=configspec['transformed'],
+                                                                     plotit=configspec['plotindsubjs'])
+                            rdm = crossrunsimilarities(preppeddata, conditions, subject.subjid, roi,
+                                                       distance=configspec['similarity'],
+                                                       transformed=configspec['transformed'], plotit=configspec['plotindsubjs'])
+                        else:
+                            result = mum.loadpickledobject(subject.subjanalysisdir + subdir + subjfilename)
+                            rdm, singleRDM = result.rdm, result.fulltimecourserdm
+                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=singleRDM, symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'], neuraltype=configspec['neuraltype'])
+                    elif configspec['neuraltype']=='svmerrors':
+                        errorfile=svmerrors.replace('<subject>', subject.subjid)
+                        errorfile=errorfile.replace('<roi>',roi)
+                        err=mum.loadpickledobject(errorfile)
+                        subdir = 'subjresults_SVMerrors_%s_%s%s/' % (e.task, e.boldsorbetas, savetag)
+                        rdm=-1*np.array(err.confusions['confmatrix'])
+                        rdm=transformsimilarities(rdm, configspec['similarity'])
+                        singleRDM=None
+                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=None, symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'],neuraltype=configspec['neuraltype'])
+                    rdmresult.comparemodels(modelRDMs, whichmodels='all', fullorcrossfoldsRDMs=configspec['fullorcrossfoldsRDMs'])
+                    if timecourse:
+                        subjfilename='%s_%s' %(e.trshift, subjfilename)
+                        subdir=subdir+'timecourse/'
+                        rdmresult.save(subject.subjanalysisdir, subdir, subjfilename)
                     else:
-                        result = mum.loadpickledobject(subject.subjanalysisdir + subdir + subjfilename)
-                        rdm, singleRDM = result.rdm, result.fulltimecourserdm
-                    rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=singleRDM, corrtype=configspec['corrtype'])
-                    rdmresult.comparemodels(modelRDMs, whichmodels='all', fullorcrossfoldsRDMs='crossfolds')
-                    rdmresult.save(subject.subjanalysisdir, subdir, subjfilename)
-                    print "saved to %s%s%s" % (subject.subjanalysisdir, subdir, subjfilename)
+                        rdmresult.save(subject.subjanalysisdir, subdir, subjfilename)
+                        print "saved to %s%s%s" % (subject.subjanalysisdir, subdir, subjfilename)
                     grouprdms[roi].append(rdm)
                     groupftcrdms[roi].append(singleRDM)
         print "finished %s, %s, %s" % (disc, sel, roi)
@@ -407,7 +499,16 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
                          colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA_crossrun' % (matrixkey), rankcolors=rankcolors)
     return RSAmat, crossrun_rdm, item2emomapping
 
-def addconfmatrix(filename, item2emomapping, conditions, rankcolors=False):
+def gettpresults(roi_summary, model, error='ws'):
+    result=roi_summary.grn2modelsRFX[model]
+    tpcorr=result['corr']
+    if error=='ws':
+        tperr=result['RFX_WSSEM']
+    elif error=='bs':
+        tperr=result['RFX_SEM']
+    return tpcorr, tperr
+
+def addconfmatrix(filename, item2emomapping, conditions, rankcolors=False, similarity='euclidean'):
     with open(filename, 'r') as inputfile:
         errors = pickle.load(inputfile)
     emos=[item2emomapping[item] for item in errors['itemlabels']]
@@ -425,11 +526,12 @@ def addconfmatrix(filename, item2emomapping, conditions, rankcolors=False):
         plotmin,plotmax=None,None
     else:
         plotmin, plotmax = 0,1
+    finalmat = transformsimilarities(finalmat, similarity)
     viz.simplematrix(finalmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
                          colorspec='RdYlBu_r', xtickrotation=90, ylabel='intended emotion', xlabel='raw error', rankcolors=rankcolors)
     return finalmat
 
-def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcolors=False):
+def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcolors=False, similarity='euclidean'):
     with open(filename, 'r') as inputfile:
         cosine = pickle.load(inputfile)
     itememos=[item2emomapping[item] for item in cosine['itemlabels']]
@@ -464,10 +566,34 @@ def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcol
     if rankcolors:
         plotmin,plotmax=None,None
     else:
-        plotmin, plotmax = 0,.3
+        plotmin, plotmax = 0,1
+    simmat=-1*simmat
+    simmat = transformsimilarities(simmat, similarity)
     viz.simplematrix(simmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
                              colorspec='RdYlBu_r', xtickrotation=90, xlabel='cosinesimilarity', rankcolors=rankcolors)
-    return finalmat
+    return simmat
+
+def addsvmerrors(filename, item2emomapping, conditions, rankcolors=False):
+    with open(filename, 'r') as inputfile:
+        errors = pickle.load(inputfile)
+    confmat=[list(line) for line in errors['confmat']]
+    sortederror=[]
+    emoorders=[abb[emo] for emo in errors['emolabels']]
+    for line in confmat:
+        sortederror.append([line[emoorders.index(emo)] for emo in conditions])
+    finalmat=[]
+    for emo in conditions:
+        vector=[line for linen,line in enumerate(sortederror) if abb[emos[linen]]==emo]
+        finalmat.append(np.mean(vector, axis=0))
+    finalmat=1-np.array(finalmat)
+    if rankcolors:
+        plotmin,plotmax=None,None
+    else:
+        plotmin, plotmax = 0,1
+    viz.simplematrix(finalmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
+                         colorspec='RdYlBu_r', xtickrotation=90, ylabel='intended emotion', xlabel='raw error', rankcolors=rankcolors)
+    return -1*finalmat
+
 
 def singletimecoursesimilarities(ds, conditions, subjectid, roi, distance='pearsonr', transformed=False, plotit=True, rankcolors=False):
     '''computes neural RDM within a single timecourse (diagonal necessarily 0)'''
@@ -542,14 +668,14 @@ def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', tr
 
 
 def relateRDMsgrn(roi_summary, modelRDMs, configspec, alphas=[.05, .01, .001], printit=True, plotpermutationfig=True,
-                  whichmodels='all', fullorcrossfoldsRDMs='crossfolds'):
+                  whichmodels='all'):
     '''computes relationship between single group neural RDM and each model. significance assessed using bootstrap and condition-permuting.'''
     corrtype=configspec['corrtype']
     num_samples=configspec['num_samples']
     if whichmodels=='all':
         models = modelRDMs.keys()
     else:
-        models=[model+'_'+fullorcrossfoldsRDMs for model in whichmodels]
+        models=[model+'_'+configspec['fullorcrossfoldsRDMs'] for model in whichmodels]
     corrs, pvals = [], []
     neuralRDM = roi_summary.grn
     for m in models:
@@ -809,21 +935,24 @@ def transformsimilarities(repdismat, distance):
     return rdm
 
 
-def singlemodelRFX(e, roi_summary, models, subjects, subdir, disc, errorbars='withinsubj', printit=True, corrtype='pearsonr', testtype='wilcoxin'):
+def singlemodelRFX(e, roi_summary, models, subjects, subdir, disc, errorbars='withinsubj', printit=True, corrtype='pearsonr', testtype='wilcoxin', timecourse=False, plotit=True):
     '''assess relation between single RDM and single model using RFX across subjects'''
     sel = e.selectors.keys()[0]
     modelsummaries = {m: [] for m in models}
     for subject in subjects:
         if roi_summary.roi in subject.rois.keys():
-            subjfilename = disc + '_' + sel + '_' + roi_summary.roi + 'RSA.pkl'
-            result = None
+            if timecourse:
+                subjfilename = '%s_%s_%s_%sRSA.pkl' %(e.trshift, disc,sel, roi_summary.roi)
+            else:
+                subjfilename = '%s_%s_%sRSA.pkl' %(disc,sel, roi_summary.roi)
+            #result = None
             with open(subject.subjanalysisdir + subdir + subjfilename, 'r') as resultfile:
                 result = pickle.load(resultfile)
             for m in models:
                 corr = result.modelcorrs[m]
                 modelsummaries[m].append(corr)
     sems, withinsubjsems = plotRFXresults(roi_summary.roi, subjects, models, modelsummaries, errorbars='withinsubj',
-                                          plotit=True, corrtype=corrtype)
+                                          plotit=plotit, corrtype=corrtype)
     if printit:
         print "single model: 1-sided %s on %s correlations between neural and model RDMs (null hypothesis: %s=0)" %(testtype,corrtype, corrtype)
     for mn, m in enumerate(models):
@@ -936,3 +1065,77 @@ def plotRFXresults(roi, subjs, models, modelsummaries, errorbars='withinsubj', p
                           title='%s model-neural correlations /n (avg of single subj corrs)' % (roi),
                           ylabel='%s \n(SEM across subjs)' % (corrtype))
     return plotsems, plotwssems
+
+class ItemResult():
+    def __init__(self,roi,disc,conditions, items, e, subject=None, avgaccuracy=None, avgintensity=None, confusions=None, emoaccuracy=None, emointensity=None):
+        self.roi=roi
+        self.subject=subject
+        self.conditions=conditions
+        self.items=items
+        self.disc=disc
+        self.avgaccuracy=avgaccuracy
+        self.avgintensity=avgintensity
+        self.confusions=confusions
+        self.emoaccuracy=emoaccuracy
+        self.emointensity=emointensity
+        self.e=e
+    def itemsave(self,):
+        mypath=os.path.join(self.e.maindir, 'itemwise/')
+        if self.subject:
+            filename='%s_%s_itemresults_%s.pkl' %(self.roi, self.disc, self.subject)
+        else:
+            filename='%s_%s_itemresults.pkl' %(self.roi, self.disc)
+        if not os.path.exists(mypath): #if the path doesn't exist, make the folder
+            os.mkdir(mypath)
+        mum.picklethisobject(mypath + filename, self)
+        return mypath + filename
+    def plotattr(self, attribute, axislabels='items'):
+        array=getattr(self,attribute)
+        if axislabels=='items':
+            xticklabels=self.items
+        elif axislabels=='conditions':
+            xticklabels=self.conditions
+        viz.simplebar(array, xlabel=axislabels, xticklabels=xticklabels, xtickrotation=90, ylabel=attribute)
+
+#perform RSA analysis over time
+def timecourseanalysis(e, conditions, windowdur, tcrange, roilist, subjlist, configspec=None, analdir=None, modelkeys=[], modelRDMs=[], disc=None, savetag=None):
+    runindsubjects=True
+    specmodelkeys=[m+'_'+configspec['fullorcrossfoldsRDMs'] for m in modelkeys]
+    timepoints=range(tcrange[0], tcrange[1])
+    tcobjs={}
+    for roi in roilist:
+        tcobj=TimecourseRSA(windowdur, tcrange, analdir=analdir, roi=roi, disc=disc, models=specmodelkeys)
+        tcobjs[roi]=tcobj
+    for sn,s in enumerate(timepoints):
+        print 'working on timepoint %s' % (s)
+        ewindow=deepcopy(e)
+        ewindow.trshift=s
+        ewindow.duration=windowdur
+        ewindow.subjects=subjlist
+        subjects=ewindow.makesubjects()
+        #define individual subjects
+        grouprdms, groupftcrdms, subdir=singlesubjanalysis(ewindow, disc, roilist, subjects, subjlist, runindsubjects, configspec, modelRDMs, conditions, savetag, whichmodels='all', svmerrors=None, timecourse=True)
+        #noise ceilings
+        noiseceilings=computenoiseceiling(grouprdms, roilist, configspec)
+        #group average RDMs % single model statistics
+        printsinglemodelstats=False
+        roi_summaries={}
+        modelsummaries={}
+        for roi in roilist:
+            tcobj=tcobjs[roi]
+            roi_summary=ROIsummary(roi, modelkeys, fullorcrossfoldsRDMs=configspec['fullorcrossfoldsRDMs'], corrtype=configspec['similarity'])
+            if configspec['neuraltype']=='rawsim':
+                roi_summary.grn=np.mean(grouprdms[roi],0) #compute mean of RDMs across subjects
+            else:
+                print "can't perform timecourse analysis with svmerrors"
+                print breakit
+            corrs, pvals, models, bestmodel, roi_summary=relateRDMsgrn(roi_summary, modelRDMs, configspec, plotpermutationfig=False, printit=printsinglemodelstats) #single model, group level (permutation for significance)
+            modelsummaries[roi], roi_summaries[roi]=singlemodelRFX(ewindow,roi_summary,specmodelkeys, subjects, subdir, disc, errorbars='withinsubj', printit=printsinglemodelstats, corrtype=configspec['corrtype'], testtype=configspec['testtype'], timecourse=True, plotit=False) #single model, RFX across participants
+            for modelname in specmodelkeys:
+                tpcorr, tperr=gettpresults(roi_summary, modelname, error='ws')
+                tpindex=timepoints.index(ewindow.trshift)
+                lower=noiseceilings[roi][0]
+                upper=noiseceilings[roi][1]
+                tcobj.updatetimecourse(modelname, tpindex, tpcorr, tperr, lower=lower, upper=upper)
+            tcobjs[roi]=tcobj
+    return tcobjs

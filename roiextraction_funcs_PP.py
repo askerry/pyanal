@@ -16,8 +16,18 @@ import scipy.stats as sst
 import csv
 import itertools
 import warnings
+import pandas as pd
 import os
 
+try:
+    sns.set_style('white')
+    sns.set_context('notebook')
+except:
+    sns.set_axes_style("white", "notebook")
+
+##################################
+#find files
+##################################
 
 def findextractedfiles(studydir, roidir, taskname, key1='', key2=''):
     pscfiles=os.path.join(studydir, roidir, 'PSC*'+key1+'*'+taskname+ '*'+key2)
@@ -25,6 +35,135 @@ def findextractedfiles(studydir, roidir, taskname, key1='', key2=''):
     betafiles=os.path.join(studydir, roidir, 'BETA*'+key1+ '*'+taskname+ '*'+key2)
     foundbetafiles = glob.glob(betafiles)
     return foundpscfiles, foundbetafiles
+
+def findextractedfilesFGE(studydir, roidir, taskname, key1='', key2=''):
+    pscfiles=os.path.join(studydir, roidir, 'ROI*','PSC*'+key1+'*'+taskname+ '*'+key2)
+    foundpscfiles = glob.glob(pscfiles)
+    betafiles=os.path.join(studydir, roidir, 'BETA*'+key1+ '*'+taskname+ '*'+key2)
+    foundbetafiles = glob.glob(betafiles)
+    return foundpscfiles, foundbetafiles
+
+##################################
+#misc
+##################################
+
+def invertdict(cdict):
+    idict={}
+    for c in cdict.keys():
+        for cond in cdict[c]['conds']:
+            idict[cond]=c
+    return idict
+
+################################
+#prep
+##################################
+
+def cleanup(droprunconds, pscdf=None, betadf=None, trcols=None):
+    for subj in droprunconds.keys():
+        for run in droprunconds[subj].keys():
+            for cond in droprunconds[subj][run]:
+                runnum=int(run)+1
+                if any(pscdf):
+                    if not trcols:
+                        trcols=pscdf.columns
+                    pscdf.loc[(pscdf['subject']==subj) & (pscdf['runs']==runnum) & (pscdf['condition']==cond), trcols]=np.nan
+                if any(betadf):
+                    betadf.loc[(betadf['subject']==subj) & (betadf['condition']==cond), 'Run %s' %runnum]=np.nan
+    return pscdf, betadf
+
+def prepdfs(pdf, bdf, comparisons, droprunconds=None, clean=True):
+    pdf_trcols=[col for col in pdf.columns if 'TR' in col]
+    bdf_runcols=[col for col in bdf.columns if 'Run' in col]
+    if clean:
+        pdf,bdf = cleanup(droprunconds, pdf, bdf, pdf_trcols)
+        pdf=pdf.groupby(['roi','condition', 'subject']).mean().reset_index() #regroup and average different runs
+        pdf['runs']='all'
+    #further fixups
+    pdf['roi']=[roi[:roi.index('_')] for roi in pdf['roi'].values]
+    bdf['roi']=[roi[:roi.index('_')] for roi in bdf['roi'].values]
+    bdf['mean']=bdf[bdf_runcols].mean(axis=1)
+    for c in comparisons.keys():
+        cdict=invertdict(comparisons[c])
+        bdf[c]=bdf['condition'].apply(addcollapsedcond, mapping=cdict)
+        pdf[c]=pdf['condition'].apply(addcollapsedcond, mapping=cdict)
+    return pdf, bdf, pdf_trcols, bdf_runcols
+
+def addcollapsedcond(cond, mapping=None):
+    try:
+        return mapping[cond]
+    except:
+        return np.nan
+
+####################################
+#summarize
+####################################
+
+#manual averaging (don't use)
+def averagedfs(hstacked, groupby=['roi', 'condition'], keepcols=None):
+    if not keepcols:
+        keepcols=hstacked.columns
+    condmeans=hstacked.groupby(groupby).mean()
+    condstds=hstacked.groupby(groupby).std()
+    condcounts=hstacked.groupby(groupby).count()
+    condsems=condstds[keepcols].values/(np.sqrt(condcounts[keepcols])).values
+    conderror=condstds.copy()
+    conderror.ix[:,keepcols]=condsems
+    return condmeans, conderror
+
+#create single vertical dataframe for timeseries data
+def verticalizetimeseries(hstacked, timecols, unit, othercols=[]):
+    othervals=[hstacked.reset_index()[col].values for col in othercols]
+    allcols=othercols+[unit, 'value', 'time', 'timename']
+    vstacked=pd.DataFrame(columns=allcols, index=range(len(hstacked)*len(timecols)))
+    for coln,col in enumerate(timecols):
+        crange=np.arange(len(hstacked))+len(hstacked)*coln
+        value=hstacked[col].values
+        units=hstacked[unit].values
+        timename=[float(col[:col.index(' ')]) for el in range(len(hstacked))]
+        time=[coln for el in range(len(hstacked))]
+        data=np.array(othervals + [units, value, time, timename]).T
+        vstacked.ix[crange,:]=data
+    for c in ['condition', 'roi']:
+        vstacked=vstacked[vstacked[c].notnull()]
+    vstacked.value=vstacked.value.astype(float)
+    return vstacked
+
+
+######################################
+#visualize
+######################################
+
+def plotpsc(tseries, colors, condition='condition'):
+    roilist=tseries.roi.unique()
+    for roi in roilist:
+        roiseries=tseries[tseries['roi']==roi]
+        f,ax=plt.subplots(figsize=[12,5])
+        sns.tsplot(roiseries, value='value', condition=condition, unit='subject', time='timename', color=colors,ci=68, ax=ax, err_style='ci_bars', err_kws={'alpha':.4})
+        ax.legend(loc=[1.02,.4], ncol=2)
+        ax.set_title(roi)
+        ax.set_ylabel('PSC (+/- 1 SEM)')
+        ax.set_xlabel('time (TRs from onset)')
+        sns.despine()
+
+def plotbetas(bdf, colordict, condition='condition', conditions=[]):
+    if len(conditions)==0:
+        conditions=colordict.keys()
+    for roi in bdf['roi'].unique():
+        rdf=bdf[bdf['roi']==roi]
+        f,ax=plt.subplots(figsize=[4,3])
+        sns.barplot(x=condition, y='mean', data=rdf, x_order=conditions, ci=68, color=[colordict[cond] for cond in conditions], ax=ax)
+        #ax=ax.set_ylim([0,1])
+        ax.set_title(roi)
+        ax.set_xticklabels(conditions,rotation=90)
+        ax.set_ylabel('Mean Beta (+/- 1 SEM')
+        ax.set_xlabel('')
+        sns.despine()
+
+
+
+
+
+#################OLD################
 
 
 def analyzepsc(pscfiles, conditions, colors, subjlist, limittimecourse=None):

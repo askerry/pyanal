@@ -15,6 +15,12 @@ import mypymvpa.utilities.misc as mum
 import itertools
 import warnings
 import seaborn as sns
+import scipy.stats
+import scipy.spatial
+import sys
+
+sys.path.append('/mindhive/saxelab/scripts/aesscripts/') #for mypymvpa
+import FGE_MISC.code.vizfuncs as vizfuncs
 
 global abb
 abb = FGEcondmapping
@@ -23,28 +29,29 @@ abb = FGEcondmapping
 class RSAresult():
     '''defines single neural RDM. methods for comparing to models and saving result output'''
 
-    def __init__(self, neuralRDM, roi, subjid, ftcRDM=None, corrtype='pearsonr', symmetrical='True', neuraltype='rawsim'):
+    def __init__(self, neuralRDM, roi, subjid, ftcRDM=None, corrtype='pearsonr', symmetrical='True',
+                 neuraltype='rawsim'):
         self.rdm = neuralRDM
         self.fulltimecourserdm = ftcRDM
         self.roi = roi
-        self.corrtype=corrtype
-        self.neuraltype=neuraltype
-        self.symmetrical=symmetrical
+        self.corrtype = corrtype
+        self.neuraltype = neuraltype
+        self.symmetrical = symmetrical
         self.subjid = subjid
         self.modelcorrs = {}
 
-    def comparemodels(self, modelRDMs, whichmodels='all', fullorcrossfoldsRDMs='crossfolds'):
-        if whichmodels=='all':
+    def comparemodels(self, modelRDMs, whichmodels='all', mflag='item'):
+        if whichmodels == 'all':
             models = modelRDMs.keys()
         else:
-            models=[model+'_'+fullorcrossfoldsRDMs for model in whichmodels]
+            models = [model for model in whichmodels if mflag in model]
         for m in models:
             mrdm = modelRDMs[m]
-            if self.corrtype=='kendallstau':
+            if self.corrtype == 'kendallstau':
                 corr, p = mus.kendallstau(self.rdm, mrdm, symmetrical=self.symmetrical)
-            elif self.corrtype=='pearsonr':
-                corr, p, throwaraylength=mus.pearsonr(self.rdm, mrdm, symmetrical=self.symmetrical)
-            elif self.corrtype=='spearman':
+            elif self.corrtype == 'pearsonr':
+                corr, p, throwaraylength = mus.pearsonr(self.rdm, mrdm, symmetrical=self.symmetrical)
+            elif self.corrtype == 'spearman':
                 pass
             self.modelcorrs[m] = corr
 
@@ -62,15 +69,16 @@ class RSAresult():
 class ROIsummary():
     '''defines summary of results for single ROI'''
 
-    def __init__(self, roi, modelRDMs, fullorcrossfoldsRDMs='crossfolds', corrtype='pearsonr'):
+    def __init__(self, roi, modelRDMs, mflag='', corrtype='pearsonr'):
         self.roi = roi
         self.grn = None
         self.ftcgrn = None
-        self.modelRDMs = [m+'_'+fullorcrossfoldsRDMs for m in modelRDMs]
+        self.modelRDMs = [m for m in modelRDMs if mflag in m]
         self.grn2models = {
-        modelname: {'corr': None, 'permutation_pval': None, 'bootstrap_CI': None, 'bootstrap_SEM': None} for modelname in
-        modelRDMs}
-        self.corrtype=corrtype
+            modelname: {'corr': None, 'permutation_pval': None, 'bootstrap_CI': None, 'bootstrap_SEM': None} for
+            modelname in
+            modelRDMs}
+        self.corrtype = corrtype
         self.grnmodelcomparisons = {}
         self.grn2modelsRFX = {modelname: {'corr': None, 'RFX_pval': None, 'RFX_SEM': None, 'RFX_WSSEM': None} for
                               modelname in modelRDMs}
@@ -89,7 +97,8 @@ class ROIsummary():
                                          'RFX_WSSEM': RFX_WSSEM}
 
     def add_grnmodelcomparisonsRFX(self, comp, corr1, corr2, stat, RFX_pval, df):
-        self.grnmodelcomparisonsRFX[comp] = {'corr1': corr1, 'corr2': corr2, 'stat': stat, 'RFX_pval': RFX_pval, 'df': df}
+        self.grnmodelcomparisonsRFX[comp] = {'corr1': corr1, 'corr2': corr2, 'stat': stat, 'RFX_pval': RFX_pval,
+                                             'df': df}
 
     def save(self, analdir, filename):
         filename = analdir + filename
@@ -99,51 +108,75 @@ class ROIsummary():
             pickler = pickle.Pickler(output, pickle.HIGHEST_PROTOCOL)
             pickler.dump(self)
 
+    def plotbar(self, array, yerr=None, xlabel='', ylabel='', title='', xticklabels=None, ax=None, figsize=[4, 3],
+                ylim=None, colors=None):
+        try:
+            sns.set_style('white')
+            sns.set_context('notebook')
+        except:
+            sns.set_axes_style("white", "notebook")
+        if not ax:
+            f, ax = plt.subplots(figsize=figsize)
+        if yerr:
+            ax.errorbar(range(len(array)), array, yerr=yerr, color=colors)
+        else:
+            ax.bar(range(len(array)), array, color=colors)
+        if xticklabels:
+            ax.set_xticks(np.arange(len(xticklabels)) + .5)
+            ax.set_xticklabels(xticklabels, rotation=90)
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel(xlabel)
+        if ylim:
+            ax.set_ylim(ylim)
+        sns.despine(ax=ax, top=True, right=True, left=False, bottom=False, trim=False)
+        plt.show()
+        return ax
+
     def summarize_grn2models(self, models2show='all', modelcolors=None, ylim=None):
-        if models2show=='all':
-            models=self.modelRDMs
+        if models2show == 'all':
+            models = self.modelRDMs
         else:
             models = [m for m in models2show if m in self.modelRDMs]
         if modelcolors:
             colors = [modelcolors[m] for m in models2show]
         else:
-            colors=None
+            colors = None
         modelcorrs = [self.grn2models[m]['corr'] for m in models]
         pvals = [self.grn2models[m]['permutation_pval'] for m in models]
         sems = [self.grn2models[m]['bootstrap_SEM'] for m in models]
-        viz.simplebar(modelcorrs, yerr=sems, title='%s-- %s of group data' % (self.roi, self.corrtype), xlabel='models',
-                      xticklabels=models, ylabel='%s\n(SEM from bootstrap test)' %(self.corrtype), colors=colors, ylim=ylim)
-        strings=["%s: corr(SEM)=%.2f(%.2f), p(permutation test)=%.3f" %(m, modelcorrs[mn],sems[mn],pvals[mn]) for mn,m in enumerate(models)]
+        vizfuncs.plotgroupneuralmodelcorrs(modelcorrs, sems, self, models, colors, ylim)
+        strings = ["%s: corr(SEM)=%.2f(%.2f), p(permutation test)=%.3f" % (m, modelcorrs[mn], sems[mn], pvals[mn]) for
+                   mn, m in enumerate(models)]
         for string in strings:
             print string
 
-    def summarize_grn2modelsRFX(self, models2show='all',errorbars='ws',modelcolors=None, ylim=None, noiseceiling=None):
-        if models2show=='all':
-            models=self.modelRDMs
+    def summarize_grn2modelsRFX(self, models2show='all', errorbars='ws', modelcolors=None, ylim=None,
+                                noiseceiling=None):
+        if models2show == 'all':
+            models = self.modelRDMs
         else:
             models = [m for m in models2show if m in self.modelRDMs]
         if modelcolors:
             colors = [modelcolors[m] for m in models2show]
         else:
-            colors=None
+            colors = None
         modelcorrs = [self.grn2modelsRFX[m]['corr'] for m in models]
         pvals = [self.grn2modelsRFX[m]['RFX_pval'] for m in models]
         if errorbars == 'ws':
             sems = [self.grn2modelsRFX[m]['RFX_WSSEM'] for m in models]
-            eblabel='+/- 1 SEM (within subjects)'
         else:
             sems = [self.grn2modelsRFX[m]['RFX_SEM'] for m in models]
-            eblabel='+/- 1 SEM (between subjects)'
-        ax=viz.simplebar(modelcorrs, yerr=sems, title='%s-- avg %s of ind data' % (self.roi, self.corrtype), xlabel='models',
-                      xticklabels=models, ylabel='%s\n(%s)' %(self.corrtype, eblabel), colors=colors, ylim=ylim, show=False)
-        if noiseceiling:
-            ax.axhspan(noiseceiling[0]-.01, noiseceiling[1], facecolor='#8888AA', alpha=0.15)
-            plt.show()
-    def summarize_grnmodelcomparisonsRFX(self, models2show='all'):
-        if models2show=='all':
-            comparisons=self.grnmodelcomparisons.keys()
+        vizfuncs.plotindneuralmodelocrrs(modelcorrs, sems, self, errorbars, models, colors, ylim, noiseceiling,
+                                         benchmark=self.benchmark)
+
+    def summarize_grnmodelcomparisonsRFX(self, models2show='all', showstats=[]):
+        if models2show == 'all':
+            comparisons = self.grnmodelcomparisons.keys()
         else:
-            comparisons = [c for c in self.grnmodelcomparisons.keys() if sum([int(m in c) for m in models2show])>=2]
+            comparisons = [c for c in self.grnmodelcomparisons.keys() if sum([int(m in c) for m in models2show]) >= 2]
+        for show in showstats:
+            comparisons = [c for c in comparisons if show in c]
         for comp in comparisons:
             r = self.grnmodelcomparisonsRFX[comp]
             if r['RFX_pval'] < .05:
@@ -151,69 +184,71 @@ class ROIsummary():
             else:
                 tag = ''
             resultsstring = '%s: M1=%.2f, M2=%.2f, z(%s)=%.2f, p=%.3f. %s' % (
-            comp, r['corr1'], r['corr2'], r['df'], r['stat'], r['RFX_pval'], tag)
+                comp, r['corr1'], r['corr2'], r['df'], r['stat'], r['RFX_pval'], tag)
             print resultsstring
 
-    def summarize_grnmodelcomparisons(self, models2show='all'):
-        if models2show=='all':
-            comparisons=self.grnmodelcomparisons.keys()
+    def summarize_grnmodelcomparisons(self, models2show='all', showstats=[]):
+        if models2show == 'all':
+            comparisons = self.grnmodelcomparisons.keys()
         else:
-            comparisons = [c for c in self.grnmodelcomparisons.keys() if sum([int(m in c) for m in models2show])>=2]
+            comparisons = [c for c in self.grnmodelcomparisons.keys() if sum([int(m in c) for m in models2show]) >= 2]
+        for show in showstats:
+            comparisons = [c for c in comparisons if show in c]
         for comp in comparisons:
             r = self.grnmodelcomparisons[comp]
             if r['bootstrap_pval'] < .05:
                 tag = '***'
             else:
                 tag = ''
-            resultsstring = '%s: M1=%.2f, M2=%.2f, p=%.3f. %s' % (comp, r['corr1'], r['corr2'], r['bootstrap_pval'], tag)
+            resultsstring = '%s: M1=%.2f, M2=%.2f, p=%.3f. %s' % (
+            comp, r['corr1'], r['corr2'], r['bootstrap_pval'], tag)
             print resultsstring
+
 
 class TimecourseRSA():
     def __init__(self, windowdur, tcrange, roi=None, disc=None, models=[], analdir=None):
-        self.windowdur=windowdur
-        self.roi=roi
-        self.disc=disc
-        self.steps=range(tcrange[0], tcrange[1])
-        self.models=models
-        self.analdir=analdir
-        self.modeltcs_err={model:[0 for tp in self.steps] for model in models}
-        self.modeltcs_corr={model:[0 for tp in self.steps] for model in models}
-        self.modeltcs_ncl={model:[0 for tp in self.steps] for model in models}
-        self.modeltcs_ncu={model:[0 for tp in self.steps] for model in models}
-        colors=sns.color_palette('husl',len(self.models))
-        self.colordict={model:colors[modeln] for modeln,model in enumerate(self.models)}
-    def updatetimecourse(self,model, tpindex, value, error, lower=0, upper=0):
-        self.modeltcs_corr[model][tpindex]=value
-        self.modeltcs_err[model][tpindex]=error
-        self.modeltcs_ncl[model][tpindex]=lower
-        self.modeltcs_ncl[model][tpindex]=upper
-    def plottimecourse(self, model, ax=None, plotnc=False, ylim=[-.04,.1], color=None):
-        y=self.modeltcs_corr[model]
-        l=self.modeltcs_ncl[model]
-        u=self.modeltcs_ncu[model]
-        err=self.modeltcs_err[model]
-        if any(np.array(y)!=0):
+        self.windowdur = windowdur
+        self.roi = roi
+        self.disc = disc
+        self.steps = range(tcrange[0], tcrange[1])
+        self.models = models
+        self.analdir = analdir
+        self.modeltcs_err = {model: [0 for tp in self.steps] for model in models}
+        self.modeltcs_corr = {model: [0 for tp in self.steps] for model in models}
+        self.modeltcs_ncl = {model: [0 for tp in self.steps] for model in models}
+        self.modeltcs_ncu = {model: [0 for tp in self.steps] for model in models}
+        colors = sns.color_palette('husl', len(self.models))
+        self.colordict = {model: colors[modeln] for modeln, model in enumerate(self.models)}
+
+    def updatetimecourse(self, model, tpindex, value, error, lower=0, upper=0):
+        self.modeltcs_corr[model][tpindex] = value
+        self.modeltcs_err[model][tpindex] = error
+        self.modeltcs_ncl[model][tpindex] = lower
+        self.modeltcs_ncl[model][tpindex] = upper
+
+    def plottimecourse(self, model, ax=None, plotnc=False, ylim=[], color=None):
+        y = self.modeltcs_corr[model]
+        l = self.modeltcs_ncl[model]
+        u = self.modeltcs_ncu[model]
+        err = self.modeltcs_err[model]
+        if any(np.array(y) != 0):
             if color:
-                ax.errorbar(range(len(y)),y, yerr=err, label=model, color=color)
+                ax.errorbar(range(len(y)), y, yerr=err, label=model, color=color)
             else:
-                ax.errorbar(range(len(y)),y, yerr=err, label=model, color=self.colordict[model])
+                ax.errorbar(range(len(y)), y, yerr=err, label=model, color=self.colordict[model])
             if plotnc:
-                ax.errorbar(range(len(y)),l, label='lower bound')
-                ax.errorbar(range(len(y)),u, label='upper bound')
-            ax.set_xticks([el for el in range(len(self.steps))])
-            ax.set_xticklabels([str(el) for el in self.steps])
-            ax.set_xlabel('RSA timecourse (TRs)')
-            ax.set_ylabel('neural-model correlation')
-            ax.set_title('neural-model correlations over time: %s' %(self.roi))
-            ax.legend(loc=[1.05,.3])
-            if plotnc==False:
+                ax.errorbar(range(len(y)), l, label='lower bound')
+                ax.errorbar(range(len(y)), u, label='upper bound')
+            if plotnc == False:
                 ax.set_ylim(ylim)
+
     def save(self):
-        savedir=self.analdir+'timecourse/'
+        savedir = self.analdir + 'timecourse/'
         if not os.path.exists(savedir): #if the path doesn't exist, make the folder
             os.mkdir(savedir)
-        filename=savedir+'timecourse_%s_%s.pkl' %(self.roi, self.disc)
+        filename = savedir + 'timecourse_%s_%s.pkl' % (self.roi, self.disc)
         mum.picklethisobject(filename, self)
+
 
 def prepforrsa(ds):
     '''creates separate RDMs in each CV fold'''
@@ -228,31 +263,33 @@ def prepforsinglerdm(ds):
     mtds = mtgs(ds)
     return mtds
 
+
 def relatesingle2group(grouprdms, indRDM, configspec):
-    corrtype=configspec['corrtype']
-    avgRDM=np.mean(grouprdms,axis=0)
-    if corrtype=='kendallstau':
+    corrtype = configspec['corrtype']
+    avgRDM = np.mean(grouprdms, axis=0)
+    if corrtype == 'kendallstau':
         corr, p = mus.kendallstau(avgRDM, indRDM, symmetrical=configspec['symmetrical'])
-    elif corrtype=='pearsonr':
-        corr, p, throwaraylength=mus.pearsonr(avgRDM, indRDM,  symmetrical=configspec['symmetrical'])
-    elif corrtype=='spearman':
+    elif corrtype == 'pearsonr':
+        corr, p, throwaraylength = mus.pearsonr(avgRDM, indRDM, symmetrical=configspec['symmetrical'])
+    elif corrtype == 'spearman':
         pass
     return corr
 
+
 def computenoiseceiling(grouprdms, roilist, configspec):
-    noiseceilings={}
+    noiseceilings = {}
     for roi in roilist:
-        rdms=np.array(grouprdms[roi])
-        uppercorrs=[]
-        lowercorrs=[]
+        rdms = np.array(grouprdms[roi])
+        uppercorrs = []
+        lowercorrs = []
         for ind in rdms:
             uppercorrs.append(relatesingle2group(rdms, ind, configspec))
         for indn, ind in enumerate(rdms):
-            nminus1rdms=[rdms[i] for i in range(len(rdms)) if i != indn]
+            nminus1rdms = [rdms[i] for i in range(len(rdms)) if i != indn]
             lowercorrs.append(relatesingle2group(nminus1rdms, ind, configspec))
-        upper=np.mean(uppercorrs)
-        lower=np.mean(lowercorrs)
-        noiseceilings[roi]=(lower,upper)
+        upper = np.mean(uppercorrs)
+        lower = np.mean(lowercorrs)
+        noiseceilings[roi] = (lower, upper)
     return noiseceilings
 
 
@@ -265,12 +302,14 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
         print roi
         grouprdms[roi], groupftcrdms[roi] = [], []
         if runindsubjects:
-            print 'running individual subjects...'
+            print 'computing individual subject neural RDMs...'
+        else:
+            print "loading existing individual subject neural RDMs and computing model correlations"
         for subjectn, subject in enumerate(subjects):
             if subject.subjid in runthemnowlist:
                 if roi in subject.rois.keys():
                     subjfilename = disc + '_' + sel + '_' + roi + 'RSA.pkl'
-                    if configspec['neuraltype']=='rawsim':
+                    if configspec['neuraltype'] == 'rawsim':
                         cfg = prepconfigV2(e, detrend=configspec['detrend'], zscore=configspec['zscore'],
                                            averaging=configspec['averaging'], removearts=configspec['removearts'],
                                            hpfilter=configspec['hpfilter'], clfname=configspec['clfname'],
@@ -283,126 +322,100 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
                             preppeddata = preprocess(dataset)
                             singletimecoursedata = prepforsinglerdm(preppeddata)
                             preppeddata = prepforrsa(preppeddata)
-                            singleRDM = singletimecoursesimilarities(singletimecoursedata, conditions, subject.subjid, roi,
+                            singleRDM = singletimecoursesimilarities(singletimecoursedata, conditions, subject.subjid,
+                                                                     roi,
                                                                      distance=configspec['similarity'],
                                                                      transformed=configspec['transformed'],
                                                                      plotit=configspec['plotindsubjs'])
                             rdm = crossrunsimilarities(preppeddata, conditions, subject.subjid, roi,
                                                        distance=configspec['similarity'],
-                                                       transformed=configspec['transformed'], plotit=configspec['plotindsubjs'])
+                                                       transformed=configspec['transformed'],
+                                                       plotit=configspec['plotindsubjs'])
                         else:
                             result = mum.loadpickledobject(subject.subjanalysisdir + subdir + subjfilename)
                             rdm, singleRDM = result.rdm, result.fulltimecourserdm
-                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=singleRDM, symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'], neuraltype=configspec['neuraltype'])
-                    elif configspec['neuraltype']=='svmerrors':
-                        errorfile=svmerrors.replace('<subject>', subject.subjid)
-                        errorfile=errorfile.replace('<roi>',roi)
-                        err=mum.loadpickledobject(errorfile)
+                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=singleRDM,
+                                              symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'],
+                                              neuraltype=configspec['neuraltype'])
+                    elif configspec['neuraltype'] == 'svmerrors':
+                        errorfile = svmerrors.replace('<subject>', subject.subjid)
+                        errorfile = errorfile.replace('<roi>', roi)
+                        err = mum.loadpickledobject(errorfile)
                         subdir = 'subjresults_SVMerrors_%s_%s%s/' % (e.task, e.boldsorbetas, savetag)
-                        rdm=-1*np.array(err.confusions['confmatrix'])
-                        rdm=transformsimilarities(rdm, configspec['similarity'])
-                        singleRDM=None
-                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=None, symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'],neuraltype=configspec['neuraltype'])
-                    rdmresult.comparemodels(modelRDMs, whichmodels='all', fullorcrossfoldsRDMs=configspec['fullorcrossfoldsRDMs'])
+                        rdm = -1 * np.array(err.confusions['confmatrix'])
+                        rdm = transformsimilarities(rdm, configspec['similarity'])
+                        singleRDM = None
+                        rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=None,
+                                              symmetrical=configspec['symmetrical'], corrtype=configspec['corrtype'],
+                                              neuraltype=configspec['neuraltype'])
+                    rdmresult.comparemodels(modelRDMs, whichmodels='all', mflag=configspec['mflag'])
                     if timecourse:
-                        subjfilename='%s_%s' %(e.trshift, subjfilename)
-                        subdir=subdir+'timecourse/'
+                        subjfilename = '%s_%s' % (e.trshift, subjfilename)
+                        subdir = subdir + 'timecourse/'
                         rdmresult.save(subject.subjanalysisdir, subdir, subjfilename)
                     else:
                         rdmresult.save(subject.subjanalysisdir, subdir, subjfilename)
-                        print "saved to %s%s%s" % (subject.subjanalysisdir, subdir, subjfilename)
+                        #print "saved to %s%s%s" % (subject.subjanalysisdir, subdir, subjfilename)
                     grouprdms[roi].append(rdm)
                     groupftcrdms[roi].append(singleRDM)
         print "finished %s, %s, %s" % (disc, sel, roi)
     return grouprdms, groupftcrdms, subdir
 
 
-def euclideandistancematrix(matrix):
-    '''take a matrix of items in rows and features in columns and return a similarity space of items'''
-    dim = len(matrix)
-    distancematrix= np.zeros((dim, dim))
-    for vector1n, vector1 in enumerate(matrix):
-        for vector2n, vector2 in enumerate(matrix):
-            #ed=np.linalg.norm(np.array(vector1)-np.array(vector2))
-            ed = similarity(vector1, vector2, metric='euclidean')
-            distancematrix[vector1n][vector2n] = ed
-    distancematrix=-1*distancematrix
-    transformeddistancematrix=transformeuclideandistancematrix(distancematrix, dim)
-    return distancematrix, transformeddistancematrix
-
-def transformeuclideandistancematrix_OLD(distancematrix, dim):
-    transformeddistancematrix = np.zeros((dim, dim))
-    meandist, stddist = np.mean(distancematrix), np.std(distancematrix, ddof=1)
-    for vector1n in range(dim):
-        for vector2n in range(dim):
-            ed = distancematrix[vector1n][vector2n]
-            zscored_ed = (ed - meandist) / stddist
-            transformeddistancematrix[vector1n][vector2n] = zscored_ed
-    return transformeddistancematrix
-
-def transformeuclideandistancematrix(distancematrix, dim):
-    transformeddistancematrix = np.zeros((dim, dim))
-    maxdist, mindist = np.max(distancematrix), np.min(distancematrix)
-    for vector1n in range(dim):
-        for vector2n in range(dim):
-            ed = distancematrix[vector1n][vector2n]
-            normalized = float(ed - mindist) / (maxdist-mindist)
-            transformeddistancematrix[vector1n][vector2n] = normalized
-    return transformeddistancematrix
-
-def similarity(pattern1, pattern2, metric='pearsonr'):
-    '''takes two arrays (e.g. neural patterns) and computes similarity between them'''
+def computedistance(array1, array2, metric='pearsonr'):
+    '''takes two arrays or matrices (e.g. neural patterns) and computes similarity between them'''
+    array1, array2 = np.array(array1), np.array(array2)
+    if array1.shape != array2.shape:
+        raise RuntimeError(
+            "can't compute similarity for arrays of different shapes: % vs. %" % (array1.shape, array2.shape))
+    if len(array1.shape) == 1:
+        input == 'array'
+        array1, array2 = [array1], [array2]
     if metric == 'pearsonr':
-        sim, p = sst.pearsonr(pattern1, pattern2)
+        dist = scipy.spatial.distance.cdist(array1, array2, 'correlation')
     if metric == 'euclidean':
-        try:
-            sqdiffs = [(p1 - pattern2[pn]) ** 2 for pn, p1 in enumerate(pattern1)]
-            sim = sum(sqdiffs)
-        except:
-            #if patterns are single digit
-            sim = ((pattern1 - pattern2) ** 2)
-    return sim # higher is more similar
+        dist = scipy.spatial.distance.cdist(array1, array2, 'euclidean')
+    if input == 'array':
+        dist = dist[0][0]
+    return dist # higher is less similar
+
 
 def makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, distance, itemsoremos):
-    idx1=[]
-    idx2=[]
+    idx1, idx2 = [], []
     for c in conditions:
-        items=[i[0] for i in item2emomapping.items() if abb[i[1]]==c]
+        items = [i[0] for i in item2emomapping.items() if abb[i[1]] == c]
         random.shuffle(items)
         idx1.extend(items[0:5])
         idx2.extend(items[5:10])
-    if itemsoremos=='items':
-        elements=itemlabels
+    if itemsoremos == 'items':
+        elements = itemlabels
     else:
-        elements=conditions
+        elements = conditions
     rdm = np.zeros([len(elements), len(elements)])
     for cn, c in enumerate(elements):
-        if itemsoremos=='items':
+        if itemsoremos == 'items':
             pattern1 = [sample for samplen, sample in enumerate(inputmatrix) if
                         itemlabels[samplen] in idx1 and itemlabels[samplen] == c]
         else:
             pattern1 = [sample for samplen, sample in enumerate(inputmatrix) if
                         itemlabels[samplen] in idx1 and abb[item2emomapping[itemlabels[samplen]]] == c]
         for c2n, c2 in enumerate(elements):
-            if itemsoremos=='items':
+            if itemsoremos == 'items':
                 pattern2 = [sample for samplen, sample in enumerate(inputmatrix) if
-                        itemlabels[samplen] in idx2 and itemlabels[samplen] == c]
+                            itemlabels[samplen] in idx2 and itemlabels[samplen] == c]
             else:
                 pattern2 = [sample for samplen, sample in enumerate(inputmatrix) if
-                        itemlabels[samplen] in idx2 and abb[item2emomapping[itemlabels[samplen]]] == c2]
-            pattern1array, pattern2array = np.mean(pattern1,axis=0), np.mean(pattern2, axis=0)
+                            itemlabels[samplen] in idx2 and abb[item2emomapping[itemlabels[samplen]]] == c2]
+            pattern1array, pattern2array = np.mean(pattern1, axis=0), np.mean(pattern2, axis=0)
             try:
-                sim = similarity(pattern1array, pattern2array, metric=distance)
+                sim = computedistance(pattern1array, pattern2array, metric=distance)
             except:
                 sim = np.nan
                 warnings.warn("You have nan values in your similarity matrix because some conditions were not found")
             rdm[cn][c2n] = sim
-    if distance=='correlation':
-        rdm=1-rdm
-    if distance=='euclidean':
-        rdm=-1*rdm
-    rdm=transformsimilarities(rdm, distance)
+    rdm = transformsimilarities(rdm, distance)
     return rdm
+
 
 def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidean', itemsoremos='emos',
                       visualizeinput=False, itemindices=None, iterations=10, rankcolors=False):
@@ -428,30 +441,31 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
             else:
                 viz.simplematrix(datamatrix, yticklabels=axis, xlabel='%s_inputmatrix' % (matrixkey))
         if similarity == 'correlation':
-            RSAmat = 1 - np.corrcoef(datamatrix)
+            RSAmat = computedistance(datamatrix, metric=similarity)
             plotmin, plotmax = -1, 1
         elif similarity == 'euclidean':
-            RSAmat_untransformed, RSAmat = euclideandistancematrix(datamatrix)
-            RSAmat=1-RSAmat
-            #plotmin, plotmax = np.min(RSAmat), np.max(RSAmat)
-            plotmin, plotmax = 0,1
+            RSAmat_untransformed = computedistance(datamatrix, metric=similarity)
+            RSAmat = transformedm(RSAmat_untransformed)
+            plotmin, plotmax = 0, 1
         else:
             raise RuntimeError("%s is not a recognized similarity metric" % (similarity))
-        #viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=axis, yticklabels=axis,
+            #viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=axis, yticklabels=axis,
         #                 colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_indRSA_full' % (matrixkey))
         #get cross run rdm
-        rdms=[]
+        rdms = []
         for i in range(iterations):
-            rdms.append(makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
-        crossrun_rdm=np.mean(rdms, axis=0)
+            rdms.append(
+                makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
+        crossrun_rdm = np.mean(rdms, axis=0)
         crossrun_rdm = 1 - crossrun_rdm
         #plotmin, plotmax = np.min(crossrun_rdm), np.max(crossrun_rdm)
         if rankcolors:
-            plotmin,plotmax=None,None
+            plotmin, plotmax = None, None
         else:
-            plotmin, plotmax = 0,1
+            plotmin, plotmax = 0, 1
         viz.simplematrix(crossrun_rdm, minspec=plotmin, maxspec=plotmax, xticklabels=axis, yticklabels=axis,
-                         colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_indRSA_crossrun' % (matrixkey), rankcolors=rankcolors)
+                         colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_indRSA_crossrun' % (matrixkey),
+                         rankcolors=rankcolors)
     elif itemsoremos == 'emos':
         #make emo matrix
         emomatrix = []
@@ -463,7 +477,7 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
             except:
                 pass
             emomatrix.append(lines)
-        # get single RDM
+            # get single RDM
         if visualizeinput:
             if type(emomatrix[0]) in (np.float64, float):
                 viz.simplebar(emomatrix, xticklabels=conditions, xtickrotation=90, figsize=[6, 4], colors='orange',
@@ -471,43 +485,49 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
             else:
                 viz.simplematrix(emomatrix, yticklabels=conditions, xlabel='%s_inputmatrix' % (matrixkey))
         if similarity == 'correlation':
-            RSAmat = 1 - np.corrcoef(emomatrix)
+            RSAmat = computedistance(datamatrix, metric=similarity)
+            plotmin, plotmax = -1, 1
         elif similarity == 'euclidean':
-            RSAmat_untransformed, RSAmat = euclideandistancematrix(emomatrix)
-            RSAmat=1-RSAmat
+            RSAmat_untransformed = computedistance(datamatrix, metric=similarity)
+            RSAmat = transformedm(RSAmat_untransformed)
         else:
             raise RuntimeError("%s is not a recognized similarity metric" % (similarity))
-        #if rankcolors:
+            #if rankcolors:
         #    plotmin,plotmax=None,None
         #else:
         #    plotmin, plotmax = 0,1
         #viz.simplematrix(RSAmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
         #                 colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA_full' % (matrixkey))
         #get cross run rdm
-        rdms=[]
+        rdms = []
         for i in range(iterations):
-            rdm=(makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
+            rdm = (
+            makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
             rdms.append(rdm)
-        crossrun_rdm=np.mean(rdms, axis=0)
+        crossrun_rdm = np.mean(rdms, axis=0)
         crossrun_rdm = 1 - crossrun_rdm
         #plotmin, plotmax = np.min(crossrun_rdm), np.max(crossrun_rdm)
         if rankcolors:
-            plotmin,plotmax=None,None
+            plotmin, plotmax = None, None
         else:
-            plotmin, plotmax = 0,1
+            plotmin, plotmax = 0, 1
         viz.simplematrix(crossrun_rdm, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
-                         colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA_crossrun' % (matrixkey), rankcolors=rankcolors)
+                         colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA_crossrun' % (matrixkey),
+                         rankcolors=rankcolors)
     return RSAmat, crossrun_rdm, item2emomapping
 
+
 def gettpresults(roi_summary, model, error='ws'):
-    result=roi_summary.grn2modelsRFX[model]
-    tpcorr=result['corr']
-    if error=='ws':
-        tperr=result['RFX_WSSEM']
-    elif error=='bs':
-        tperr=result['RFX_SEM']
+    result = roi_summary.grn2modelsRFX[model]
+    tpcorr = result['corr']
+    if error == 'ws':
+        tperr = result['RFX_WSSEM']
+    elif error == 'bs':
+        tperr = result['RFX_SEM']
     return tpcorr, tperr
 
+
+'''
 def addconfmatrix(filename, item2emomapping, conditions, rankcolors=False, similarity='euclidean'):
     with open(filename, 'r') as inputfile:
         errors = pickle.load(inputfile)
@@ -530,7 +550,9 @@ def addconfmatrix(filename, item2emomapping, conditions, rankcolors=False, simil
     viz.simplematrix(finalmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
                          colorspec='RdYlBu_r', xtickrotation=90, ylabel='intended emotion', xlabel='raw error', rankcolors=rankcolors)
     return finalmat
+'''
 
+'''
 def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcolors=False, similarity='euclidean'):
     with open(filename, 'r') as inputfile:
         cosine = pickle.load(inputfile)
@@ -560,7 +582,7 @@ def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcol
         for emo in conditions:
             submatrix=[line for linen,line in enumerate(sortedmat) if newemos[linen]==emo]
             finalmat.append(np.mean(submatrix,axis=0))
-        #normedmat=transformeuclideandistancematrix(finalmat, len(finalmat)) #transform as though it's euclidean
+        #normedmat=transformedm(finalmat) #transform as though it's euclidean
         matrices.append(np.array(finalmat))
     simmat=np.mean(matrices,axis=0)
     if rankcolors:
@@ -572,7 +594,9 @@ def addcosinematrix(filename, item2emomapping, conditions, iterations=2, rankcol
     viz.simplematrix(simmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
                              colorspec='RdYlBu_r', xtickrotation=90, xlabel='cosinesimilarity', rankcolors=rankcolors)
     return simmat
+'''
 
+'''
 def addsvmerrors(filename, item2emomapping, conditions, rankcolors=False):
     with open(filename, 'r') as inputfile:
         errors = pickle.load(inputfile)
@@ -593,16 +617,18 @@ def addsvmerrors(filename, item2emomapping, conditions, rankcolors=False):
     viz.simplematrix(finalmat, minspec=plotmin, maxspec=plotmax, xticklabels=conditions, yticklabels=conditions,
                          colorspec='RdYlBu_r', xtickrotation=90, ylabel='intended emotion', xlabel='raw error', rankcolors=rankcolors)
     return -1*finalmat
+'''
 
 
-def singletimecoursesimilarities(ds, conditions, subjectid, roi, distance='pearsonr', transformed=False, plotit=True, rankcolors=False):
+def singletimecoursesimilarities(ds, conditions, subjectid, roi, distance='pearsonr', transformed=False, plotit=True,
+                                 rankcolors=False):
     '''computes neural RDM within a single timecourse (diagonal necessarily 0)'''
     rdm = np.zeros([len(conditions), len(conditions)])
     for cn, c in enumerate(conditions):
         pattern1 = [sample for samplen, sample in enumerate(ds.samples) if ds.sa.targets[samplen] == c][0]
         for c2n, c2 in enumerate(conditions):
             pattern2 = [sample for samplen, sample in enumerate(ds.samples) if ds.sa.targets[samplen] == c2][0]
-            sim = similarity(pattern1, pattern2, metric=distance)
+            sim = computedistance(pattern1, pattern2, metric=distance)
             rdm[cn][c2n] = sim
     if distance == 'pearsonr':
         if transformed:
@@ -613,18 +639,19 @@ def singletimecoursesimilarities(ds, conditions, subjectid, roi, distance='pears
     elif distance == 'euclidean':
         if transformed:
             rdm = transformsimilarities(rdm, distance)
-            clim = [0,1]
+            clim = [0, 1]
         else:
             clim = [np.min(rdm), np.max(rdm)]
     if plotit:
         if rankcolors:
-            clim = [None,None]
+            clim = [None, None]
         viz.plot_simmtx(rdm, conditions, '%s: %s single timecourse pattern distances (%s)' % (subjectid, roi, distance),
                         clim=clim, axislabels=['conditions', 'conditions'], rankcolors=rankcolors)
     return rdm
 
 
-def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', transformed=False, plotit=True, rankcolors=False):
+def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', transformed=False, plotit=True,
+                         rankcolors=False):
     '''compute neural RDM across runs (diagonal is interpretable)'''
     folds = list(set(ds.sa.chunks))
     if len(folds) > 2:
@@ -639,7 +666,7 @@ def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', tr
             if pattern1 != [] and pattern2 != []:
                 pattern1array, pattern2array = pattern1[0], pattern2[0]
                 try:
-                    sim = similarity(pattern1array, pattern2array, metric=distance)
+                    sim = computedistance(pattern1array, pattern2array, metric=distance)
                 except:
                     sim = np.nan
                     warnings.warn("Unexpectedly failed to compute distance for the following 2 patterns")
@@ -656,12 +683,12 @@ def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', tr
     elif distance == 'euclidean':
         if transformed:
             rdm = transformsimilarities(rdm, distance)
-            clim = [0,1]
+            clim = [0, 1]
         else:
             clim = [np.min(rdm), np.max(rdm)]
     if plotit:
         if rankcolors:
-            clim = [None,None]
+            clim = [None, None]
         viz.plot_simmtx(rdm, conditions, '%s: %s crossrun pattern distances (%s)' % (subjectid, roi, distance),
                         clim=clim, axislabels=folds, rankcolors=rankcolors)
     return rdm
@@ -670,27 +697,30 @@ def crossrunsimilarities(ds, conditions, subjectid, roi, distance='pearsonr', tr
 def relateRDMsgrn(roi_summary, modelRDMs, configspec, alphas=[.05, .01, .001], printit=True, plotpermutationfig=True,
                   whichmodels='all'):
     '''computes relationship between single group neural RDM and each model. significance assessed using bootstrap and condition-permuting.'''
-    corrtype=configspec['corrtype']
-    num_samples=configspec['num_samples']
-    if whichmodels=='all':
+    corrtype = configspec['corrtype']
+    num_samples = configspec['num_samples']
+    if whichmodels == 'all':
         models = modelRDMs.keys()
     else:
-        models=[model+'_'+configspec['fullorcrossfoldsRDMs'] for model in whichmodels]
+        models = [model for model in whichmodels if configspec['mflag'] in model]
     corrs, pvals = [], []
     neuralRDM = roi_summary.grn
     for m in models:
         rdm = modelRDMs[m]
-        if corrtype=='kendallstau':
+        if corrtype == 'kendallstau':
             corr, p = mus.kendallstau(neuralRDM, rdm, symmetrical=configspec['symmetrical'])
-        elif corrtype=='pearsonr':
-            corr, p, throwaraylength=mus.pearsonr(neuralRDM, rdm,  symmetrical=configspec['symmetrical'])
-        elif corrtype=='spearman':
+        elif corrtype == 'pearsonr':
+            corr, p, throwaraylength = mus.pearsonr(neuralRDM, rdm, symmetrical=configspec['symmetrical'])
+        elif corrtype == 'spearman':
             pass
         permMean, upperbound, lowerbound, nullrejected, realpval, exactp = singleRDMrelation_permutationtest(neuralRDM,
-                                                                                                             rdm, configspec, corr,
+                                                                                                             rdm,
+                                                                                                             configspec,
+                                                                                                             corr,
                                                                                                              alphas,
                                                                                                              plotit=plotpermutationfig)
-        string = "%s-%s: %s=%.3f, p=%.3f (p%s) (p value from randomized permutation test)" % (roi_summary.roi, m, corrtype, corr, exactp, realpval)
+        string = "%s-%s: %s=%.3f, p=%.3f (p%s) (p value from randomized permutation test)" % (
+        roi_summary.roi, m, corrtype, corr, exactp, realpval)
         if printit:
             print string
         corrs.append(corr)
@@ -752,8 +782,8 @@ def testdist(observedmean, samplemeans, num_samples, alpha, tail='both', ax=None
 
 
 def singleRDMrelation_permutationtest(neuralRDM, modelRDM, configspec, observedcorr, alphas, plotit=False):
-    corrtype=configspec['corrtype']
-    num_samples=configspec['num_samples']
+    corrtype = configspec['corrtype']
+    num_samples = configspec['num_samples']
     neuralRDM = np.array(neuralRDM)
     modelRDM = np.array(modelRDM)
     rdmsize = np.shape(neuralRDM)
@@ -765,11 +795,12 @@ def singleRDMrelation_permutationtest(neuralRDM, modelRDM, configspec, observedc
         rowidx = np.random.permutation(rdmsize[0])
         colsshuffled = neuralRDM[:, colidx]
         shuffledrdm = colsshuffled[rowidx, :]
-        if corrtype=='kendallstau':
+        if corrtype == 'kendallstau':
             rdmcorr, throwawayp = mus.kendallstau(shuffledrdm, modelRDM, symmetrical=configspec['symmetrical'])
-        elif corrtype=='pearsonr':
-            rdmcorr, throwawayp, throwaraylength=mus.pearsonr(shuffledrdm, modelRDM,  symmetrical=configspec['symmetrical'])
-        elif corrtype=='spearman':
+        elif corrtype == 'pearsonr':
+            rdmcorr, throwawayp, throwaraylength = mus.pearsonr(shuffledrdm, modelRDM,
+                                                                symmetrical=configspec['symmetrical'])
+        elif corrtype == 'spearman':
             pass
         samplecorrs.append(rdmcorr)
     permMean = np.mean(samplecorrs)
@@ -820,17 +851,17 @@ def bootstrapinner(e, subject, disc, sel, roi, configspec, conditions, modelRDMs
     return subjrdms
 
 
-def bootstrapfromconditions(disc, modelRDMs, grouprdmmean, configspec, printit=True, whichmodels='all', fullorcrossfoldsRDMs='crossfolds'):
-    corrtype=configspec['corrtype']
-    num_samples=configspec['num_samples']
+def bootstrapfromconditions(disc, modelRDMs, grouprdmmean, configspec, printit=True, whichmodels='all', mflag=''):
+    corrtype = configspec['corrtype']
+    num_samples = configspec['num_samples']
     if printit:
         print 'performing bootstrapping for errorbars (conditions)'
     shape = np.shape(grouprdmmean)
     idx = range(shape[0])
-    if whichmodels=='all':
+    if whichmodels == 'all':
         models = modelRDMs.keys()
     else:
-        models=[model+'_'+fullorcrossfoldsRDMs for model in whichmodels]
+        models = [model for model in whichmodels if mflag in model]
     bsmodelcorrs = {m: [] for m in models}
     for m in models:
         for b in range(num_samples):
@@ -840,24 +871,26 @@ def bootstrapfromconditions(disc, modelRDMs, grouprdmmean, configspec, printit=T
             for x in rsampleidx:
                 for y in rsampleidx:
                     resampledgrouprdm[x, y] = grouprdmmean[x, y]
-            if corrtype=='kendallstau':
-                corr, throwawayp = mus.kendallstau(resampledgrouprdm, modelRDMs[m], symmetrical=configspec['symmetrical'])
-            elif corrtype=='pearsonr':
-                corr, throwawayp, throwaraylength=mus.pearsonr(resampledgrouprdm, modelRDMs[m], symmetrical=configspec['symmetrical'])
-            elif corrtype=='spearman':
+            if corrtype == 'kendallstau':
+                corr, throwawayp = mus.kendallstau(resampledgrouprdm, modelRDMs[m],
+                                                   symmetrical=configspec['symmetrical'])
+            elif corrtype == 'pearsonr':
+                corr, throwawayp, throwaraylength = mus.pearsonr(resampledgrouprdm, modelRDMs[m],
+                                                                 symmetrical=configspec['symmetrical'])
+            elif corrtype == 'spearman':
                 pass
             bsmodelcorrs[m].append(corr)
     return bsmodelcorrs
 
 
-def bootstrapfromstimuli(e, disc, roi, subjects, configspec, modelRDMs, conditions, whichmodels='all', fullorcrossfoldsRDMs='crossfolds'):
+def bootstrapfromstimuli(e, disc, roi, subjects, configspec, modelRDMs, conditions, whichmodels='all', mflag=''):
     '''bootstraps at the level of stimuli in individual subjects'''
     print 'performing bootstrapping for errorbars (stimuli)'
     warnings.warn(
         "This probably isn't implemented the way you want it. don't use without reading and thinking about it.")
     print "starting bootstrap for %s, %s" % (disc, roi)
-    corrtype=configspec['corrtype']
-    num_samples=configspec['num_samples']
+    corrtype = configspec['corrtype']
+    num_samples = configspec['num_samples']
     sel = e.selectors.keys()[0]
     neuralmtxs = []
     grouprdms = []
@@ -867,19 +900,20 @@ def bootstrapfromstimuli(e, disc, roi, subjects, configspec, modelRDMs, conditio
             subjrdms = bootstrapinner(e, subject, disc, sel, roi, configspec, conditions, num_samples, modelRDMs)
             grouprdms.append(subjrdms)
     grouprdms = np.mean(grouprdms, 0)
-    if whichmodels=='all':
+    if whichmodels == 'all':
         models = modelRDMs.keys()
     else:
-        models=[model+'_'+fullorcrossfoldsRDMs for model in whichmodels]
+        models = [model for model in whichmodels if mflag in model]
     bsmodelcorrs = {m: [] for m in models}
     #optimize this so that we don't reloop through everything this way
     for b in range(num_samples):
         for m in models:
-            if corrtype=='kendallstau':
+            if corrtype == 'kendallstau':
                 corr, throwawayp = mus.kendallstau(grouprdms[b], modelRDMs[m], symmetrical=configspec['symmetrical'])
-            elif corrtype=='pearsonr':
-                corr, throwawayp, throwaraylength=mus.pearsonr(grouprdms[b], modelRDMs[m],  symmetrical=configspec['symmetrical'])
-            elif corrtype=='spearman':
+            elif corrtype == 'pearsonr':
+                corr, throwawayp, throwaraylength = mus.pearsonr(grouprdms[b], modelRDMs[m],
+                                                                 symmetrical=configspec['symmetrical'])
+            elif corrtype == 'spearman':
                 pass
             bsmodelcorrs[m].append(corr)
     print "finished bootstrapping %s, %s, %s" % (disc, sel, roi)
@@ -911,60 +945,61 @@ def singlemodelRDM_bootstraperror(roi, modelname, bsmodelcorrs, alpha=0.05, plot
                                                           observed=observed)
     if printit:
         print "%s-- %s: actualmean=%.3f, bsmean=%.3f, bsSEM=%.3f, CI=%s,-%s" % (
-        roi, modelname, observed, bsMean, bsSEM, lowerbound, upperbound)
+            roi, modelname, observed, bsMean, bsSEM, lowerbound, upperbound)
     return bsMean, bsSEM, upperbound, lowerbound
+
+
+def transformedm(dm):
+    dm = np.array(dm).astype(float)
+    maxdist, mindist = np.max(dm), np.min(dm)
+    tdm = (dm - mindist) / (maxdist - mindist)
+    return tdm
 
 
 def transformsimilarities(repdismat, distance):
     '''return transformed similarity matrices'''
     rdm = deepcopy(repdismat)
     if distance == 'euclidean':
-        rdm=transformeuclideandistancematrix(rdm, len(rdm))
-        # trdm = rdm * 0
-        # meandist = np.nanmean(rdm)
-        # stddist = np.nanstd(rdm, ddof=1)
-        # dims = np.array(repdismat).shape
-        # for cn, c in enumerate(range(dims[0])):
-        #     for c2n, c2 in enumerate(range(dims[1])):
-        #         ed = rdm[cn][c2n]
-        #         zscored_ed = (ed - meandist) / stddist
-        #         trdm[cn][c2n] = zscored_ed
-        # rdm = trdm
-    if distance == 'pearsonr':
+        rdm = transformedm(rdm)
+    elif distance == 'pearsonr':
         rdm = np.arctanh(rdm)
+    else:
+        warnings.warn('transformation not implemented for distance type %s' % distance)
     return rdm
 
 
-def singlemodelRFX(e, roi_summary, models, subjects, subdir, disc, errorbars='withinsubj', printit=True, corrtype='pearsonr', testtype='wilcoxin', timecourse=False, plotit=True):
+def singlemodelRFX(e, roi_summary, modelkeys, subjects, subdir, disc, errorbars='withinsubj', printit=True,
+                   corrtype='pearsonr', testtype='wilcoxin', timecourse=False, plotit=True):
     '''assess relation between single RDM and single model using RFX across subjects'''
     sel = e.selectors.keys()[0]
-    modelsummaries = {m: [] for m in models}
+    modelsummaries = {m: [] for m in modelkeys}
     for subject in subjects:
         if roi_summary.roi in subject.rois.keys():
             if timecourse:
-                subjfilename = '%s_%s_%s_%sRSA.pkl' %(e.trshift, disc,sel, roi_summary.roi)
+                subjfilename = '%s_%s_%s_%sRSA.pkl' % (e.trshift, disc, sel, roi_summary.roi)
             else:
-                subjfilename = '%s_%s_%sRSA.pkl' %(disc,sel, roi_summary.roi)
-            #result = None
+                subjfilename = '%s_%s_%sRSA.pkl' % (disc, sel, roi_summary.roi)
+                #result = None
             with open(subject.subjanalysisdir + subdir + subjfilename, 'r') as resultfile:
                 result = pickle.load(resultfile)
-            for m in models:
+            for m in modelkeys:
                 corr = result.modelcorrs[m]
                 modelsummaries[m].append(corr)
-    sems, withinsubjsems = plotRFXresults(roi_summary.roi, subjects, models, modelsummaries, errorbars='withinsubj',
+    sems, withinsubjsems = plotRFXresults(roi_summary.roi, subjects, modelkeys, modelsummaries, errorbars='withinsubj',
                                           plotit=plotit, corrtype=corrtype)
     if printit:
-        print "single model: 1-sided %s on %s correlations between neural and model RDMs (null hypothesis: %s=0)" %(testtype,corrtype, corrtype)
-    for mn, m in enumerate(models):
+        print "single model: 1-sided %s on %s correlations between neural and model RDMs (null hypothesis: %s=0)" % (
+        testtype, corrtype, corrtype)
+    for mn, m in enumerate(modelkeys):
         df = len(modelsummaries[m]) - 1
         mean = np.mean(modelsummaries[m])
-        if testtype=='wilcoxin':
+        if testtype == 'wilcoxin':
             T, p, stat = sst.wilcoxonAES(modelsummaries[m])
-            stattype='z'
-        elif testtype=='ttest':
-            transformedrs=[np.arctanh(el) for el in modelsummaries[m]]
-            stat,p = sst.ttest_1samp(transformedrs, 0)
-            stattype='t'
+            stattype = 'z'
+        elif testtype == 'ttest':
+            transformedrs = [np.arctanh(el) for el in modelsummaries[m]]
+            stat, p = sst.ttest_1samp(transformedrs, 0)
+            stattype = 't'
         else:
             raise RuntimeError("%s is not a recognized test" % (testtype))
         if stat >= 0:
@@ -979,25 +1014,28 @@ def singlemodelRFX(e, roi_summary, models, subjects, subdir, disc, errorbars='wi
 
 
 def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries, configspec, modelRDMs, conditions,
-                printit=True, whichmodels='all', fullorcrossfoldsRDMs='crossfolds'):
+                  printit=True, whichmodels='all', mflag=''):
     bsmodelcorrs = {}
     if comparisontype == 'stimbootstrap':
         bsmodelcorrs = bootstrapfromstimuli(e, disc, roi_summary.roi, subjects, configspec, modelRDMs, conditions,
-                                            fullorcrossfoldsRDMs=fullorcrossfoldsRDMs, corrtype=configspec['corrtype'])
+                                            mflag=mflag, corrtype=configspec['corrtype'])
         if printit:
-            print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (configspec['corrtype'],
+            print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (
+            configspec['corrtype'],
             comparisontype)
     elif comparisontype == 'condbootstrap':
-        bsmodelcorrs = bootstrapfromconditions(disc, modelRDMs, roi_summary.grn, configspec, fullorcrossfoldsRDMs=fullorcrossfoldsRDMs)
+        bsmodelcorrs = bootstrapfromconditions(disc, modelRDMs, roi_summary.grn, configspec, mflag=mflag)
         if printit:
-            print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (configspec['corrtype'],comparisontype)
+            print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (
+            configspec['corrtype'], comparisontype)
     elif comparisontype == 'RFXsubjects':
         if printit:
-            print "model comparison 2-sided signed rank tests comparing %s correlations between neural and model RDMs" % (configspec['corrtype'])
-    if whichmodels=='all':
-        models = [model for model in modelRDMs.keys() if fullorcrossfoldsRDMs in model]
+            print "model comparison 2-sided signed rank tests comparing %s correlations between neural and model RDMs" % (
+            configspec['corrtype'])
+    if whichmodels == 'all':
+        models = [model for model in modelRDMs.keys() if mflag in model]
     else:
-        models=[model+'_'+fullorcrossfoldsRDMs for model in whichmodels]
+        models = [model for model in whichmodels if mflag in model]
     comparisons = [el for el in itertools.combinations(range(len(models)), 2)]
     for comp in comparisons:
         m1, m2 = models[comp[0]], models[comp[1]]
@@ -1011,18 +1049,18 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
             meandiff = mean1 - mean2
         if comparisontype == 'RFXsubjects':
             df = len(array1) - 1
-            if configspec['testtype']=='wilcoxin':
+            if configspec['testtype'] == 'wilcoxin':
                 T, pval, stat = sst.wilcoxonAES(array1, array2)
-                stattype='z'
-            elif configspec['testtype']=='ttest':
-                transformedarray1=[np.arctanh(el) for el in array1]
-                transformedarray1=[np.arctanh(el) for el in array2]
-                stat,p = sst.ttest_ind(array1, array2)
-                stattype='t'
+                stattype = 'z'
+            elif configspec['testtype'] == 'ttest':
+                transformedarray1 = [np.arctanh(el) for el in array1]
+                transformedarray1 = [np.arctanh(el) for el in array2]
+                stat, p = sst.ttest_ind(array1, array2)
+                stattype = 't'
             else:
                 raise RuntimeError("%s is not a recognized test" % (configspec['testtype']))
             string = '%s: %s(%.2f)-%s(%.2f): %s(%.0f)=%.3f, p=%.3f.' % (
-            roi_summary.roi, m1, mean1, m2, mean2, stattype,df, stat, pval)
+                roi_summary.roi, m1, mean1, m2, mean2, stattype, df, stat, pval)
             roi_summary.add_grnmodelcomparisonsRFX(compname, mean1, mean2, stat, pval, df)
         elif comparisontype in ('stimbootstrap', 'condbootstrap'):
             bsMeanDiff, bsSEMDiff, upperbound, lowerbound, nullrejected, pval = comparemodelRDMfits_bootstraptest(m1,
@@ -1030,7 +1068,7 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
                                                                                                                   bsmodelcorrs,
                                                                                                                   alpha=0.05)
             string = "%s-- %s(%s)-%s(%s): observedMeandiff=%.3f, BSMdiff=%.3f, BSSEMdiff=%.3f, p=%.3f" % (
-            roi_summary.roi, m1, mean1, m2, mean2, meandiff, bsMeanDiff, bsSEMDiff, pval)
+                roi_summary.roi, m1, mean1, m2, mean2, meandiff, bsMeanDiff, bsSEMDiff, pval)
             roi_summary.add_grnmodelcomparisons(compname, mean1, mean2, bsMeanDiff, pval, [lowerbound, upperbound])
         if printit:
             print string
@@ -1058,7 +1096,7 @@ def plotRFXresults(roi, subjs, models, modelsummaries, errorbars='withinsubj', p
         if plotit:
             viz.simplebar(plotmeans, yerr=plotwssems, xticklabels=models,
                           title='%s model-neural correlations /n (avg of single subj corrs)' % (roi),
-                          ylabel='%s \n(SEM within subjs)' %(corrtype))
+                          ylabel='%s \n(SEM within subjs)' % (corrtype))
     else:
         if plotit:
             viz.simplebar(plotmeans, yerr=plotsems, xticklabels=models,
@@ -1066,76 +1104,88 @@ def plotRFXresults(roi, subjs, models, modelsummaries, errorbars='withinsubj', p
                           ylabel='%s \n(SEM across subjs)' % (corrtype))
     return plotsems, plotwssems
 
+
 class ItemResult():
-    def __init__(self,roi,disc,conditions, items, e, subject=None, avgaccuracy=None, avgintensity=None, confusions=None, emoaccuracy=None, emointensity=None):
-        self.roi=roi
-        self.subject=subject
-        self.conditions=conditions
-        self.items=items
-        self.disc=disc
-        self.avgaccuracy=avgaccuracy
-        self.avgintensity=avgintensity
-        self.confusions=confusions
-        self.emoaccuracy=emoaccuracy
-        self.emointensity=emointensity
-        self.e=e
-    def itemsave(self,):
-        mypath=os.path.join(self.e.maindir, 'itemwise/')
+    def __init__(self, roi, disc, conditions, items, e, subject=None, avgaccuracy=None, avgintensity=None,
+                 confusions=None, emoaccuracy=None, emointensity=None):
+        self.roi = roi
+        self.subject = subject
+        self.conditions = conditions
+        self.items = items
+        self.disc = disc
+        self.avgaccuracy = avgaccuracy
+        self.avgintensity = avgintensity
+        self.confusions = confusions
+        self.emoaccuracy = emoaccuracy
+        self.emointensity = emointensity
+        self.e = e
+
+    def itemsave(self, ):
+        mypath = os.path.join(self.e.maindir, 'itemwise/')
         if self.subject:
-            filename='%s_%s_itemresults_%s.pkl' %(self.roi, self.disc, self.subject)
+            filename = '%s_%s_itemresults_%s.pkl' % (self.roi, self.disc, self.subject)
         else:
-            filename='%s_%s_itemresults.pkl' %(self.roi, self.disc)
+            filename = '%s_%s_itemresults.pkl' % (self.roi, self.disc)
         if not os.path.exists(mypath): #if the path doesn't exist, make the folder
             os.mkdir(mypath)
         mum.picklethisobject(mypath + filename, self)
         return mypath + filename
+
     def plotattr(self, attribute, axislabels='items'):
-        array=getattr(self,attribute)
-        if axislabels=='items':
-            xticklabels=self.items
-        elif axislabels=='conditions':
-            xticklabels=self.conditions
+        array = getattr(self, attribute)
+        if axislabels == 'items':
+            xticklabels = self.items
+        elif axislabels == 'conditions':
+            xticklabels = self.conditions
         viz.simplebar(array, xlabel=axislabels, xticklabels=xticklabels, xtickrotation=90, ylabel=attribute)
 
 #perform RSA analysis over time
-def timecourseanalysis(e, conditions, windowdur, tcrange, roilist, subjlist, configspec=None, analdir=None, modelkeys=[], modelRDMs=[], disc=None, savetag=None):
-    runindsubjects=True
-    specmodelkeys=[m+'_'+configspec['fullorcrossfoldsRDMs'] for m in modelkeys]
-    timepoints=range(tcrange[0], tcrange[1])
-    tcobjs={}
+def timecourseanalysis(e, conditions, windowdur, tcrange, roilist, subjlist, configspec=None, analdir=None,
+                       modelkeys=[], modelRDMs=[], disc=None, savetag=None, runindsubjects=True):
+    specmodelkeys = [model for model in modelkeys if configspec['mflag'] in model]
+    timepoints = range(tcrange[0], tcrange[1])
+    tcobjs = {}
     for roi in roilist:
-        tcobj=TimecourseRSA(windowdur, tcrange, analdir=analdir, roi=roi, disc=disc, models=specmodelkeys)
-        tcobjs[roi]=tcobj
-    for sn,s in enumerate(timepoints):
+        tcobj = TimecourseRSA(windowdur, tcrange, analdir=analdir, roi=roi, disc=disc, models=specmodelkeys)
+        tcobjs[roi] = tcobj
+    for sn, s in enumerate(timepoints):
         print 'working on timepoint %s' % (s)
-        ewindow=deepcopy(e)
-        ewindow.trshift=s
-        ewindow.duration=windowdur
-        ewindow.subjects=subjlist
-        subjects=ewindow.makesubjects()
+        ewindow = deepcopy(e)
+        ewindow.trshift = s
+        ewindow.duration = windowdur
+        ewindow.subjects = subjlist
+        subjects = ewindow.makesubjects()
         #define individual subjects
-        grouprdms, groupftcrdms, subdir=singlesubjanalysis(ewindow, disc, roilist, subjects, subjlist, runindsubjects, configspec, modelRDMs, conditions, savetag, whichmodels='all', svmerrors=None, timecourse=True)
+        grouprdms, groupftcrdms, subdir = singlesubjanalysis(ewindow, disc, roilist, subjects, subjlist, runindsubjects,
+                                                             configspec, modelRDMs, conditions, savetag,
+                                                             whichmodels='all', svmerrors=None, timecourse=True)
         #noise ceilings
-        noiseceilings=computenoiseceiling(grouprdms, roilist, configspec)
+        noiseceilings = computenoiseceiling(grouprdms, roilist, configspec)
         #group average RDMs % single model statistics
-        printsinglemodelstats=False
-        roi_summaries={}
-        modelsummaries={}
+        printsinglemodelstats = False
+        roi_summaries = {}
+        modelsummaries = {}
         for roi in roilist:
-            tcobj=tcobjs[roi]
-            roi_summary=ROIsummary(roi, modelkeys, fullorcrossfoldsRDMs=configspec['fullorcrossfoldsRDMs'], corrtype=configspec['similarity'])
-            if configspec['neuraltype']=='rawsim':
-                roi_summary.grn=np.mean(grouprdms[roi],0) #compute mean of RDMs across subjects
+            tcobj = tcobjs[roi]
+            roi_summary = ROIsummary(roi, modelkeys, mflag=configspec['mflag'], corrtype=configspec['similarity'])
+            if configspec['neuraltype'] == 'rawsim':
+                roi_summary.grn = np.mean(grouprdms[roi], 0) #compute mean of RDMs across subjects
             else:
-                print "can't perform timecourse analysis with svmerrors"
-                print breakit
-            corrs, pvals, models, bestmodel, roi_summary=relateRDMsgrn(roi_summary, modelRDMs, configspec, plotpermutationfig=False, printit=printsinglemodelstats) #single model, group level (permutation for significance)
-            modelsummaries[roi], roi_summaries[roi]=singlemodelRFX(ewindow,roi_summary,specmodelkeys, subjects, subdir, disc, errorbars='withinsubj', printit=printsinglemodelstats, corrtype=configspec['corrtype'], testtype=configspec['testtype'], timecourse=True, plotit=False) #single model, RFX across participants
+                raise RuntimeError("can't perform timecourse analysis with svmerrors")
+            corrs, pvals, models, bestmodel, roi_summary = relateRDMsgrn(roi_summary, modelRDMs, configspec,
+                                                                         plotpermutationfig=False,
+                                                                         printit=printsinglemodelstats) #single model, group level (permutation for significance)
+            modelsummaries[roi], roi_summaries[roi] = singlemodelRFX(ewindow, roi_summary, specmodelkeys, subjects,
+                                                                     subdir, disc, errorbars='withinsubj',
+                                                                     printit=printsinglemodelstats,
+                                                                     corrtype=configspec['corrtype'],
+                                                                     testtype=configspec['testtype'], timecourse=True,
+                                                                     plotit=False) #single model, RFX across participants
             for modelname in specmodelkeys:
-                tpcorr, tperr=gettpresults(roi_summary, modelname, error='ws')
-                tpindex=timepoints.index(ewindow.trshift)
-                lower=noiseceilings[roi][0]
-                upper=noiseceilings[roi][1]
+                tpcorr, tperr = gettpresults(roi_summary, modelname, error='ws')
+                tpindex = timepoints.index(ewindow.trshift)
+                lower = noiseceilings[roi][0]
+                upper = noiseceilings[roi][1]
                 tcobj.updatetimecourse(modelname, tpindex, tpcorr, tperr, lower=lower, upper=upper)
-            tcobjs[roi]=tcobj
+            tcobjs[roi] = tcobj
     return tcobjs

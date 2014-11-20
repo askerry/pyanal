@@ -17,6 +17,9 @@ import warnings
 import seaborn as sns
 import scipy.stats
 import scipy.spatial
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import anova_lm
+import pandas as pd
 import sys
 
 sys.path.append('/mindhive/saxelab/scripts/aesscripts/') #for mypymvpa
@@ -133,7 +136,7 @@ class ROIsummary():
         plt.show()
         return ax
 
-    def summarize_grn2models(self, models2show='all', modelcolors=None, ylim=None):
+    def summarize_grn2models(self, models2show='all', modelcolors=None, ylim=None, printit=False):
         if models2show == 'all':
             models = self.modelRDMs
         else:
@@ -146,13 +149,18 @@ class ROIsummary():
         pvals = [self.grn2models[m]['permutation_pval'] for m in models]
         sems = [self.grn2models[m]['bootstrap_SEM'] for m in models]
         vizfuncs.plotgroupneuralmodelcorrs(modelcorrs, sems, self, models, colors, ylim)
-        strings = ["%s: corr(SEM)=%.2f(%.2f), p(permutation test)=%.3f" % (m, modelcorrs[mn], sems[mn], pvals[mn]) for
-                   mn, m in enumerate(models)]
-        for string in strings:
-            print string
+        if printit:
+            try:
+                strings = [
+                    "%s: corr(SEM)=%.2f(%.2f), p(permutation test)=%.3f" % (m, modelcorrs[mn], sems[mn], pvals[mn]) for
+                    mn, m in enumerate(models)]
+                for string in strings:
+                    print string
+            except:
+                pass
 
     def summarize_grn2modelsRFX(self, models2show='all', errorbars='ws', modelcolors=None, ylim=None,
-                                noiseceiling=None):
+                                noiseceiling=None, printit=False):
         if models2show == 'all':
             models = self.modelRDMs
         else:
@@ -162,6 +170,8 @@ class ROIsummary():
         else:
             colors = None
         modelcorrs = [self.grn2modelsRFX[m]['corr'] for m in models]
+        stats = [self.grn2modelsRFX[m]['stat'] for m in models]
+        dfs = [self.grn2modelsRFX[m]['df'] for m in models]
         pvals = [self.grn2modelsRFX[m]['RFX_pval'] for m in models]
         if errorbars == 'ws':
             sems = [self.grn2modelsRFX[m]['RFX_WSSEM'] for m in models]
@@ -169,6 +179,18 @@ class ROIsummary():
             sems = [self.grn2modelsRFX[m]['RFX_SEM'] for m in models]
         vizfuncs.plotindneuralmodelocrrs(modelcorrs, sems, self, errorbars, models, colors, ylim, noiseceiling,
                                          benchmark=self.benchmark)
+        if printit:
+            try:
+                print "one-sample test against 0"
+                for mn, m in enumerate(models):
+                    if pvals[mn] < .05:
+                        flag = '***'
+                    else:
+                        flag = ''
+                    print "%s: %s(SEM)=%.2f(%.2f), stat(%s)=%.2f p=%.3f %s" % (
+                    m, self.corrtype, modelcorrs[mn], sems[mn], dfs[mn], stats[mn], pvals[mn], flag)
+            except:
+                pass
 
     def summarize_grnmodelcomparisonsRFX(self, models2show='all', showstats=[]):
         if models2show == 'all':
@@ -201,7 +223,7 @@ class ROIsummary():
             else:
                 tag = ''
             resultsstring = '%s: M1=%.2f, M2=%.2f, p=%.3f. %s' % (
-            comp, r['corr1'], r['corr2'], r['bootstrap_pval'], tag)
+                comp, r['corr1'], r['corr2'], r['bootstrap_pval'], tag)
             print resultsstring
 
 
@@ -293,6 +315,59 @@ def computenoiseceiling(grouprdms, roilist, configspec):
     return noiseceilings
 
 
+def parsingle(roi, roi_summaries, modelRDMs, modelkeys, configspec, noiseceilings, e, subjects, subdir, disc,
+              groupbootstraperrors, printsinglemodelstats=False):
+    roi_summary = roi_summaries[roi]
+    corrs, pvals, models, bestmodel, roi_summary = relateRDMsgrn(roi_summary, modelRDMs, configspec,
+                                                                 plotpermutationfig=False,
+                                                                 printit=printsinglemodelstats) #single model, group level (permutation for significance)
+    modelsummary, roi_summary = singlemodelRFX(e, roi_summary, [m for m in modelkeys if configspec['mflag'] in m],
+                                               subjects, subdir, disc, errorbars='withinsubj',
+                                               printit=printsinglemodelstats, corrtype=configspec['corrtype'],
+                                               testtype=configspec['testtype']) #single model, RFX across participants
+    if groupbootstraperrors:
+        bsmodelcorrs = bootstrapfromconditions(disc, modelRDMs, roi_summary.grn, configspec,
+                                               printit=printsinglemodelstats) #bsmodelcorrs=rsaf.bootstrapfromstimuli(e, disc, subjects, configspec, modelRDMs, conditions)
+    for modelname in modelRDMs.keys():
+        modelindex = models.index(modelname)
+        if groupbootstraperrors:
+            bsMean, bsSEM, upperbound, lowerbound = singlemodelRDM_bootstraperror(roi, modelname, bsmodelcorrs,
+                                                                                  alpha=0.05, plotit=False,
+                                                                                  observed=corrs[modelindex],
+                                                                                  printit=printsinglemodelstats)
+            roi_summary.add_grn2models(modelname, corrs[modelindex], permutation_pval=pvals[modelindex],
+                                       bootstrap_CI=[lowerbound, upperbound], bootstrap_SEM=bsSEM)
+        else:
+            roi_summary.add_grn2models(modelname, corrs[modelindex], permutation_pval=pvals[modelindex])
+    roi_summary.noiseceiling = noiseceilings[roi]
+    roi_summary.benchmark = roi_summary.grn2modelsRFX['behavioralconfs_rdm']['corr']
+    return modelsummary, roi_summary
+
+
+def testROIxfeatureinteractions(df, withinsubj=False):
+    if withinsubj:
+        #raise RuntimeError('within-subjects/repeated measures ANOVA not yet implemented')
+        mus.twowayanova('correlation', 'feature', 'roi', df, withinunit='subject', repeatedmeasures=True)
+    else:
+        mus.twowayanova('correlation', 'feature', 'roi', df, withinunit=None, repeatedmeasures=False)
+
+
+def makeROIdf(roilist, subjects, features, disc, sel, subdir):
+    df = pd.DataFrame(columns=['subject', 'feature', 'roi', 'correlation'])
+    for roi in roilist:
+        filename = disc + '_' + sel + '_' + roi + 'RSA.pkl'
+        for subj in subjects:
+            try:
+                rdmresult = mum.loadpickledobject(os.path.join(subj.subjanalysisdir, subdir, filename))
+                featcorrs = rdmresult.modelcorrs
+                for f in features:
+                    df = df.append({'roi': roi, 'subject': subj.subjid, 'feature': f, 'correlation': featcorrs[f]},
+                                   ignore_index=True)
+            except:
+                pass
+    return df
+
+
 def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubjects, configspec, modelRDMs, conditions,
                        savetag, whichmodels='all', svmerrors=None, timecourse=False):
     sel = e.selectors.keys()[0]
@@ -332,6 +407,8 @@ def singlesubjanalysis(e, disc, roilist, subjects, runthemnowlist, runindsubject
                                                        transformed=configspec['transformed'],
                                                        plotit=configspec['plotindsubjs'])
                         else:
+                            if timecourse:
+                                subdir = subdir + 'timecourse/' + str(e.trshift) + '_'
                             result = mum.loadpickledobject(subject.subjanalysisdir + subdir + subjfilename)
                             rdm, singleRDM = result.rdm, result.fulltimecourserdm
                         rdmresult = RSAresult(rdm, roi, subject.subjid, ftcRDM=singleRDM,
@@ -502,7 +579,7 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
         rdms = []
         for i in range(iterations):
             rdm = (
-            makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
+                makesimmatrixcrossruns(conditions, item2emomapping, inputmatrix, itemlabels, similarity, itemsoremos))
             rdms.append(rdm)
         crossrun_rdm = np.mean(rdms, axis=0)
         crossrun_rdm = 1 - crossrun_rdm
@@ -515,6 +592,13 @@ def makemodelmatrices(conditions, rsamatrixfile, matrixkey, similarity='euclidea
                          colorspec='RdYlBu_r', xtickrotation=90, xlabel='%s_emoRSA_crossrun' % (matrixkey),
                          rankcolors=rankcolors)
     return RSAmat, crossrun_rdm, item2emomapping
+
+
+def svmerror2rdm(svmerrorfiles_group, roi, configspec):
+    f = svmerrorfiles_group.replace('<roi>', roi)
+    err = mum.loadpickledobject(f)
+    rdm = -1 * np.array(err.confusions['confmatrix'])
+    return transformsimilarities(rdm, configspec['similarity'])
 
 
 def gettpresults(roi_summary, model, error='ws'):
@@ -720,7 +804,7 @@ def relateRDMsgrn(roi_summary, modelRDMs, configspec, alphas=[.05, .01, .001], p
                                                                                                              alphas,
                                                                                                              plotit=plotpermutationfig)
         string = "%s-%s: %s=%.3f, p=%.3f (p%s) (p value from randomized permutation test)" % (
-        roi_summary.roi, m, corrtype, corr, exactp, realpval)
+            roi_summary.roi, m, corrtype, corr, exactp, realpval)
         if printit:
             print string
         corrs.append(corr)
@@ -989,7 +1073,7 @@ def singlemodelRFX(e, roi_summary, modelkeys, subjects, subdir, disc, errorbars=
                                           plotit=plotit, corrtype=corrtype)
     if printit:
         print "single model: 1-sided %s on %s correlations between neural and model RDMs (null hypothesis: %s=0)" % (
-        testtype, corrtype, corrtype)
+            testtype, corrtype, corrtype)
     for mn, m in enumerate(modelkeys):
         df = len(modelsummaries[m]) - 1
         mean = np.mean(modelsummaries[m])
@@ -1021,17 +1105,17 @@ def comparemodels(comparisontype, e, disc, roi_summary, subjects, modelsummaries
                                             mflag=mflag, corrtype=configspec['corrtype'])
         if printit:
             print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (
-            configspec['corrtype'],
-            comparisontype)
+                configspec['corrtype'],
+                comparisontype)
     elif comparisontype == 'condbootstrap':
         bsmodelcorrs = bootstrapfromconditions(disc, modelRDMs, roi_summary.grn, configspec, mflag=mflag)
         if printit:
             print "model comparison bootstrap tests comparing %s correlations between neural and model RDMs (%s)" % (
-            configspec['corrtype'], comparisontype)
+                configspec['corrtype'], comparisontype)
     elif comparisontype == 'RFXsubjects':
         if printit:
             print "model comparison 2-sided signed rank tests comparing %s correlations between neural and model RDMs" % (
-            configspec['corrtype'])
+                configspec['corrtype'])
     if whichmodels == 'all':
         models = [model for model in modelRDMs.keys() if mflag in model]
     else:
@@ -1141,9 +1225,11 @@ class ItemResult():
 
 #perform RSA analysis over time
 def timecourseanalysis(e, conditions, windowdur, tcrange, roilist, subjlist, configspec=None, analdir=None,
-                       modelkeys=[], modelRDMs=[], disc=None, savetag=None, runindsubjects=True):
+                       modelkeys=[], modelRDMs=[], disc=None, savetag=None, step=1, runindsubjects=True):
     specmodelkeys = [model for model in modelkeys if configspec['mflag'] in model]
-    timepoints = range(tcrange[0], tcrange[1])
+    timepoints = range(tcrange[0], tcrange[1], step)
+    print "computing neural x model correlations at each timepoint (%s sec windows)" % (windowdur)
+    print timepoints
     tcobjs = {}
     for roi in roilist:
         tcobj = TimecourseRSA(windowdur, tcrange, analdir=analdir, roi=roi, disc=disc, models=specmodelkeys)
@@ -1189,3 +1275,40 @@ def timecourseanalysis(e, conditions, windowdur, tcrange, roilist, subjlist, con
                 tcobj.updatetimecourse(modelname, tpindex, tpcorr, tperr, lower=lower, upper=upper)
             tcobjs[roi] = tcobj
     return tcobjs
+
+
+def plotcorragainstN(samplesizes, iters, roi, modelname):
+    means, stds = [], []
+    for k in samplesizes:
+        taus = [iteration[k + 1] for iteration in iters]
+        means.append(np.mean(taus))
+        stds.append(np.std(taus, ddof=1))
+    samplesizes = [el + 1 for el in samplesizes]
+    plt.errorbar(samplesizes, means, yerr=stds, label=roi)
+    #plt.xlabel("sample size")
+    plt.ylabel("group kendall tau (std across iterations)")
+    plt.title("corr with %s (over %s iterations)" % (modelname, len(iters)))
+
+
+def comparesamplesizes(grouprdms, iterations, subjlist, roi, modelname, configspec, modelRDMs):
+    itercorrs = []
+    if configspec['neuraltype'] == 'rawsim':
+        individual_roi_rmds = grouprdms[roi]
+    else:
+        raise RuntimeError('implemented for neuraltype==rawsim only')
+    subjs = samplesizes = range(len(individual_roi_rmds))
+    for i in range(iterations):
+        correlations = {}
+        for n in samplesizes:
+            sample = np.array(np.random.choice(subjs, n + 1, replace=False))
+            subset_roi_rdms = np.array(individual_roi_rmds)[sample]
+            subsetrdm = np.mean(subset_roi_rdms, 0) #compute mean of RDMs across subjects
+            rdmresult = RSAresult(subsetrdm, roi, 'subset', ftcRDM=None, symmetrical=configspec['symmetrical'],
+                                  corrtype=configspec['corrtype'], neuraltype=configspec['neuraltype'])
+            rdmresult.comparemodels(modelRDMs, whichmodels=[modelname], mflag=configspec['mflag'])
+            correlations[n + 1] = rdmresult.modelcorrs[modelname]
+        itercorrs.append(correlations)
+    plotcorragainstN(samplesizes, itercorrs, roi, modelname)
+    plt.legend(loc=[1, .7])
+    plt.xlim(0, len(subjlist))
+    return itercorrs
